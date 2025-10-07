@@ -30,15 +30,15 @@ const (
 )
 
 type PrioritiesModel struct {
-	config       *config.Config
-	configPath   string
-	currentSection prioritySection
-	cursor       int
-	mode         inputMode
-	textInput    textinput.Model
-	editingIndex int
-	modified     bool
-	message      string
+	config             *config.Config
+	configPath         string
+	currentSection     prioritySection
+	cursor             int
+	mode               inputMode
+	textInput          textinput.Model
+	editingIndex       int
+	previousPriorities *config.Priorities
+	message            string
 }
 
 func NewPrioritiesModel(cfg *config.Config) PrioritiesModel {
@@ -47,13 +47,13 @@ func NewPrioritiesModel(cfg *config.Config) PrioritiesModel {
 	ti.CharLimit = 200
 
 	return PrioritiesModel{
-		config:         cfg,
-		configPath:     os.ExpandEnv("$HOME/.focus-agent/config.yaml"),
-		currentSection: okrsSection,
-		cursor:         0,
-		mode:           normalMode,
-		textInput:      ti,
-		modified:       false,
+		config:             cfg,
+		configPath:         os.ExpandEnv("$HOME/.focus-agent/config.yaml"),
+		currentSection:     okrsSection,
+		cursor:             0,
+		mode:               normalMode,
+		textInput:          ti,
+		previousPriorities: nil,
 	}
 }
 
@@ -73,9 +73,13 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 				// Add the new item
 				value := strings.TrimSpace(m.textInput.Value())
 				if value != "" {
+					m.saveStateForUndo()
 					m.addPriority(value)
-					m.modified = true
-					m.message = "Priority added. Press 's' to save changes."
+					if err := m.saveConfig(); err != nil {
+						m.message = fmt.Sprintf("Error saving: %v", err)
+					} else {
+						m.message = "Priority added"
+					}
 				}
 				m.mode = normalMode
 				m.textInput.SetValue("")
@@ -105,9 +109,13 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 				// Update the item
 				value := strings.TrimSpace(m.textInput.Value())
 				if value != "" {
+					m.saveStateForUndo()
 					m.updatePriority(m.editingIndex, value)
-					m.modified = true
-					m.message = "Priority updated. Press 's' to save changes."
+					if err := m.saveConfig(); err != nil {
+						m.message = fmt.Sprintf("Error saving: %v", err)
+					} else {
+						m.message = "Priority updated"
+					}
 				}
 				m.mode = normalMode
 				m.textInput.SetValue("")
@@ -178,9 +186,13 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 
 		case "d", "delete", "backspace":
 			// Delete current item
+			m.saveStateForUndo()
 			if m.deletePriority() {
-				m.modified = true
-				m.message = "Priority deleted. Press 's' to save changes."
+				if err := m.saveConfig(); err != nil {
+					m.message = fmt.Sprintf("Error saving: %v", err)
+				} else {
+					m.message = "Priority deleted"
+				}
 				// Adjust cursor if needed
 				maxCursor := m.getSectionLength(m.currentSection) - 1
 				if m.cursor > maxCursor && maxCursor >= 0 {
@@ -188,20 +200,31 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 				}
 			}
 
-		case "s":
-			// Save changes
-			if m.modified {
+		case "u":
+			// Undo last change
+			if m.previousPriorities != nil {
+				m.config.Priorities = *m.previousPriorities
 				if err := m.saveConfig(); err != nil {
-					m.message = fmt.Sprintf("Error saving: %v", err)
+					m.message = fmt.Sprintf("Error undoing: %v", err)
 				} else {
-					m.message = "Changes saved successfully!"
-					m.modified = false
+					m.message = "Undone"
+					m.previousPriorities = nil
 				}
 			}
 		}
 	}
 
 	return m, nil
+}
+
+func (m *PrioritiesModel) saveStateForUndo() {
+	// Create a deep copy of current priorities
+	m.previousPriorities = &config.Priorities{
+		OKRs:            append([]string{}, m.config.Priorities.OKRs...),
+		FocusAreas:      append([]string{}, m.config.Priorities.FocusAreas...),
+		KeyProjects:     append([]string{}, m.config.Priorities.KeyProjects...),
+		KeyStakeholders: append([]string{}, m.config.Priorities.KeyStakeholders...),
+	}
 }
 
 func (m *PrioritiesModel) addPriority(value string) {
@@ -392,9 +415,9 @@ func (m PrioritiesModel) View() string {
 		Foreground(lipgloss.Color("241")).
 		Padding(1, 0, 0, 2)
 
-	helpText := "tab: switch sections | enter: edit | a: add | d: delete | s: save"
-	if m.modified {
-		helpText += " | ⚠️  Unsaved changes!"
+	helpText := "tab: switch sections | enter: edit | a: add | d: delete | u: undo"
+	if m.previousPriorities != nil {
+		helpText += " | ↶ Undo available"
 	}
 
 	b.WriteString("\n")
