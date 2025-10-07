@@ -36,10 +36,10 @@ func NewGeminiClient(apiKey string, database *db.DB, cfg *config.Config) (*Gemin
 		return nil, fmt.Errorf("failed to create Gemini client: %w", err)
 	}
 
-	// Use configured model (defaults to gemini-2.5-flash)
+	// Use configured model (defaults to gemini-1.5-flash-latest)
 	modelName := cfg.Gemini.Model
 	if modelName == "" {
-		modelName = "gemini-2.5-flash"
+		modelName = "gemini-1.5-flash-latest"
 	}
 	model := client.GenerativeModel(modelName)
 

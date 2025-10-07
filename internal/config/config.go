@@ -198,7 +198,7 @@ func applyDefaults(cfg *Config) {
 
 	// Gemini defaults
 	if cfg.Gemini.Model == "" {
-		cfg.Gemini.Model = "gemini-1.5-flash"
+		cfg.Gemini.Model = "gemini-1.5-flash-latest"
 	}
 	if cfg.Gemini.MaxTokens == 0 {
 		cfg.Gemini.MaxTokens = 2000
@@ -212,10 +212,11 @@ func applyDefaults(cfg *Config) {
 	// Rate limit defaults
 	if cfg.Gemini.RateLimits == nil {
 		cfg.Gemini.RateLimits = map[string]int{
-			"gemini-2.5-flash":      8,  // Free tier: 10 RPM (use 8 for buffer)
-			"gemini-1.5-pro":        2,  // Free tier: 2 RPM
-			"gemini-2.0-flash-exp":  15, // Preview tier: 15 RPM
-			"gemini-1.5-flash":      8,  // Legacy model (same as 2.5)
+			"gemini-1.5-flash-latest": 15, // Free tier: 15 RPM
+			"gemini-2.5-flash":        8,  // Free tier: 10 RPM (use 8 for buffer)
+			"gemini-1.5-pro":          2,  // Free tier: 2 RPM
+			"gemini-2.0-flash-exp":    15, // Preview tier: 15 RPM
+			"gemini-1.5-flash":        8,  // Legacy model (deprecated)
 		}
 	}
 	if cfg.Gemini.DefaultRateLimit == 0 {
