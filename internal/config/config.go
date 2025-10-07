@@ -15,6 +15,7 @@ type Config struct {
 	Chat       Chat       `yaml:"chat"`
 	API        API        `yaml:"api"`
 	Remote     Remote     `yaml:"remote"`
+	TUI        TUI        `yaml:"tui"`
 	Schedule   Schedule   `yaml:"schedule"`
 	Planner    Planner    `yaml:"planner"`
 	Limits     Limits     `yaml:"limits"`
@@ -67,6 +68,10 @@ type API struct {
 type Remote struct {
 	URL     string `yaml:"url"`
 	AuthKey string `yaml:"auth_key"`
+}
+
+type TUI struct {
+	AutoRefreshSeconds int `yaml:"auto_refresh_seconds"`
 }
 
 type Schedule struct {
@@ -234,6 +239,11 @@ func applyDefaults(cfg *Config) {
 	// API defaults
 	if cfg.API.Port == 0 {
 		cfg.API.Port = 8081
+	}
+
+	// TUI defaults
+	if cfg.TUI.AutoRefreshSeconds == 0 {
+		cfg.TUI.AutoRefreshSeconds = 30
 	}
 
 	// Schedule defaults

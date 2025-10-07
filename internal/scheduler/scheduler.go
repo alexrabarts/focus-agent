@@ -380,8 +380,16 @@ func (s *Scheduler) ProcessNewMessages() {
 			continue
 		}
 
-		// Generate summary
-		summary, err := s.llm.SummarizeThread(s.ctx, messages)
+		// Prepare metadata for smart model selection
+		metadata := llm.ThreadMetadata{
+			QueueSize:    len(threadIDs),
+			SenderEmail:  messages[0].From, // Most recent message's sender
+			Timestamp:    messages[0].Timestamp,
+			MessageCount: len(messages),
+		}
+
+		// Generate summary with smart model selection
+		summary, err := s.llm.SummarizeThreadWithModelSelection(s.ctx, messages, metadata)
 		if err != nil {
 			log.Printf("Failed to summarize thread %s: %v", threadID, err)
 			continue

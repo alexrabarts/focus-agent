@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -20,6 +21,19 @@ const (
 	threadsView
 	statsView
 )
+
+// tickMsg is sent when it's time to refresh
+type tickMsg struct{}
+
+// tick returns a command that sends a tickMsg after the configured interval
+func tick(cfg *config.Config) tea.Cmd {
+	if cfg.TUI.AutoRefreshSeconds <= 0 {
+		return nil
+	}
+	return tea.Tick(time.Duration(cfg.TUI.AutoRefreshSeconds)*time.Second, func(t time.Time) tea.Msg {
+		return tickMsg{}
+	})
+}
 
 type Model struct {
 	currentView view
@@ -68,6 +82,7 @@ func (m Model) Init() tea.Cmd {
 		m.tasksModel.fetchTasks(),
 		m.statsModel.fetchStats(),
 		m.threadsModel.fetchThreads(),
+		tick(m.config), // Start auto-refresh ticker
 	)
 }
 
@@ -77,6 +92,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+
+	case tickMsg:
+		// Auto-refresh current view and schedule next tick
+		return m, tea.Batch(m.refreshCurrentView(), tick(m.config))
 
 	case tea.KeyMsg:
 		// Check if priorities view is in input mode
@@ -209,7 +228,14 @@ func (m Model) renderFooter() string {
 		Foreground(lipgloss.Color("241")).
 		Padding(0, 1)
 
-	return helpStyle.Render("q: quit | ←/→: switch tabs | ↑/↓: navigate | enter: select")
+	footer := "q: quit | ←/→: switch tabs | ↑/↓: navigate | enter: select"
+
+	// Add refresh indicator if auto-refresh is enabled
+	if m.config.TUI.AutoRefreshSeconds > 0 {
+		footer += fmt.Sprintf(" | ↻ Auto-refresh: %ds", m.config.TUI.AutoRefreshSeconds)
+	}
+
+	return helpStyle.Render(footer)
 }
 
 func Start(database *db.DB, clients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config) error {

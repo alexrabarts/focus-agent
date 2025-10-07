@@ -19,12 +19,22 @@ import (
 
 // GeminiClient handles Gemini API operations
 type GeminiClient struct {
-	client      *genai.Client
-	model       *genai.GenerativeModel
-	db          *db.DB
-	config      *config.Config
-	rateLimiter *rate.Limiter
-	cacheTTL    time.Duration
+	client          *genai.Client
+	model           *genai.GenerativeModel
+	proModel        *genai.GenerativeModel
+	db              *db.DB
+	config          *config.Config
+	rateLimiter     *rate.Limiter
+	proRateLimiter  *rate.Limiter
+	cacheTTL        time.Duration
+}
+
+// ThreadMetadata contains metadata for smart model selection
+type ThreadMetadata struct {
+	QueueSize      int       // Number of threads waiting to be processed
+	SenderEmail    string    // Email address of sender
+	Timestamp      time.Time // When the thread was received
+	MessageCount   int       // Number of messages in thread
 }
 
 // NewGeminiClient creates a new Gemini client
@@ -73,7 +83,23 @@ func NewGeminiClient(apiKey string, database *db.DB, cfg *config.Config) (*Gemin
 	rateLimit := getRateLimit(cfg, modelName)
 	limiter := rate.NewLimiter(rate.Every(time.Minute/time.Duration(rateLimit)), 1)
 
+	// Create Pro model and rate limiter for strategic use
+	proModel := client.GenerativeModel("gemini-2.5-pro")
+	if cfg.Gemini.Temperature > 0 {
+		proModel.SetTemperature(cfg.Gemini.Temperature)
+	}
+	proModel.SetTopK(40)
+	proModel.SetTopP(0.95)
+	if cfg.Gemini.MaxTokens > 0 {
+		proModel.SetMaxOutputTokens(int32(cfg.Gemini.MaxTokens))
+	}
+	proModel.SafetySettings = model.SafetySettings
+
+	proRateLimit := getRateLimit(cfg, "gemini-2.5-pro")
+	proLimiter := rate.NewLimiter(rate.Every(time.Minute/time.Duration(proRateLimit)), 1)
+
 	log.Printf("Initialized Gemini client with model %s (rate limit: %d RPM)", modelName, rateLimit)
+	log.Printf("Pro model available: gemini-2.5-pro (rate limit: %d RPM)", proRateLimit)
 
 	cacheTTL := time.Duration(cfg.Gemini.CacheHours) * time.Hour
 	if cacheTTL == 0 {
@@ -81,12 +107,14 @@ func NewGeminiClient(apiKey string, database *db.DB, cfg *config.Config) (*Gemin
 	}
 
 	return &GeminiClient{
-		client:      client,
-		model:       model,
-		db:          database,
-		config:      cfg,
-		rateLimiter: limiter,
-		cacheTTL:    cacheTTL,
+		client:         client,
+		model:          model,
+		proModel:       proModel,
+		db:             database,
+		config:         cfg,
+		rateLimiter:    limiter,
+		proRateLimiter: proLimiter,
+		cacheTTL:       cacheTTL,
 	}, nil
 }
 
@@ -108,10 +136,15 @@ func (g *GeminiClient) Close() error {
 
 // generateWithRetry wraps GenerateContent with exponential backoff retry logic
 func (g *GeminiClient) generateWithRetry(ctx context.Context, prompt genai.Text) (*genai.GenerateContentResponse, error) {
+	return g.generateWithRetryForModel(ctx, prompt, g.model)
+}
+
+// generateWithRetryForModel wraps GenerateContent with exponential backoff retry logic for a specific model
+func (g *GeminiClient) generateWithRetryForModel(ctx context.Context, prompt genai.Text, model *genai.GenerativeModel) (*genai.GenerateContentResponse, error) {
 	var lastErr error
 
 	for attempt := 0; attempt <= g.config.Gemini.MaxRetries; attempt++ {
-		resp, err := g.model.GenerateContent(ctx, prompt)
+		resp, err := model.GenerateContent(ctx, prompt)
 		if err == nil {
 			return resp, nil
 		}
@@ -188,6 +221,112 @@ func (g *GeminiClient) SummarizeThread(ctx context.Context, messages []*db.Messa
 		Prompt:    prompt,
 		Response:  summary,
 		Model:     "gemini-1.5-flash",
+		Tokens:    tokens,
+		ExpiresAt: time.Now().Add(g.cacheTTL),
+	}
+	g.db.SaveCachedResponse(cache)
+
+	return summary, nil
+}
+
+// SummarizeThreadWithModelSelection summarizes a thread using smart model selection
+func (g *GeminiClient) SummarizeThreadWithModelSelection(ctx context.Context, messages []*db.Message, metadata ThreadMetadata) (string, error) {
+	// Calculate priority score for model selection
+	score := 0
+	reasoning := []string{}
+
+	// Small queue (≤10 threads): +3 points
+	if metadata.QueueSize <= 10 {
+		score += 3
+		reasoning = append(reasoning, fmt.Sprintf("small queue (%d threads)", metadata.QueueSize))
+	}
+
+	// Key stakeholder sender: +2 points
+	isKeyStakeholder := false
+	for _, stakeholder := range g.config.Priorities.KeyStakeholders {
+		if strings.Contains(strings.ToLower(metadata.SenderEmail), strings.ToLower(stakeholder)) {
+			isKeyStakeholder = true
+			break
+		}
+	}
+	if isKeyStakeholder {
+		score += 2
+		reasoning = append(reasoning, "key stakeholder")
+	}
+
+	// Recent (< 24h): +2 points
+	if time.Since(metadata.Timestamp) < 24*time.Hour {
+		score += 2
+		reasoning = append(reasoning, "recent message")
+	}
+
+	// Complex (5+ messages): +1 point
+	if metadata.MessageCount >= 5 {
+		score += 1
+		reasoning = append(reasoning, fmt.Sprintf("complex thread (%d messages)", metadata.MessageCount))
+	}
+
+	// Decide which model to use (score ≥ 3 = Pro, else Flash)
+	usePro := score >= 3
+	selectedModel := "gemini-2.5-flash"
+	selectedRateLimiter := g.rateLimiter
+	actualModel := g.model
+
+	if usePro {
+		// Check if Pro rate limiter has capacity
+		if g.proRateLimiter.Allow() {
+			selectedModel = "gemini-2.5-pro"
+			selectedRateLimiter = g.proRateLimiter
+			actualModel = g.proModel
+			log.Printf("Using Pro model (score: %d, reasons: %s)", score, strings.Join(reasoning, ", "))
+		} else {
+			// Fallback to Flash if Pro exhausted
+			log.Printf("Pro model exhausted, falling back to Flash (score: %d, reasons: %s)", score, strings.Join(reasoning, ", "))
+		}
+	} else {
+		log.Printf("Using Flash model (score: %d)", score)
+	}
+
+	// Build prompt
+	prompt := g.buildThreadSummaryPrompt(messages)
+
+	// Check cache
+	hash := g.hashPrompt(prompt + selectedModel)
+	cached, err := g.db.GetCachedResponse(hash)
+	if err == nil && cached != nil {
+		log.Printf("Using cached summary for thread")
+		return cached.Response, nil
+	}
+
+	// Wait for rate limit
+	if err := selectedRateLimiter.Wait(ctx); err != nil {
+		return "", fmt.Errorf("rate limiter error: %w", err)
+	}
+
+	// Generate summary with retry using selected model
+	startTime := time.Now()
+	resp, err := g.generateWithRetryForModel(ctx, genai.Text(prompt), actualModel)
+	if err != nil {
+		g.db.LogUsage("gemini", "summarize_thread", 0, 0, time.Since(startTime), err)
+		return "", fmt.Errorf("failed to generate summary: %w", err)
+	}
+
+	// Extract text from response
+	summary := g.extractText(resp)
+
+	// Calculate token usage (approximate)
+	tokens := g.estimateTokens(prompt + summary)
+	cost := g.calculateCost(tokens)
+
+	// Log usage
+	g.db.LogUsage("gemini", "summarize_thread", tokens, cost, time.Since(startTime), nil)
+
+	// Cache response
+	cache := &db.LLMCache{
+		Hash:      hash,
+		Prompt:    prompt,
+		Response:  summary,
+		Model:     selectedModel,
 		Tokens:    tokens,
 		ExpiresAt: time.Now().Add(g.cacheTTL),
 	}

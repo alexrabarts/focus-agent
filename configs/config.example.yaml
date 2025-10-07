@@ -104,6 +104,12 @@ remote:
   # Authentication key (must match api.auth_key on server)
   auth_key: ""
 
+# TUI (Terminal User Interface) settings
+tui:
+  # Auto-refresh interval in seconds (0 to disable)
+  # When enabled, the TUI will automatically refresh the current view
+  auto_refresh_seconds: 30
+
 # Scheduling configuration
 schedule:
   # Time for daily morning brief (24-hour format)
