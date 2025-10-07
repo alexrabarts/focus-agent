@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -148,6 +149,39 @@ func (e *DailyQuotaExceededError) Error() string {
 	return e.Message
 }
 
+// isDailyQuotaError checks if a 429 error is a daily quota exhaustion (not just per-minute rate limit)
+func isDailyQuotaError(apiErr *googleapi.Error) bool {
+	// Check 1: Message field for quota exhaustion keywords
+	if strings.Contains(apiErr.Message, "current quota") ||
+		strings.Contains(apiErr.Message, "quota exceeded") {
+		return true
+	}
+
+	// Check 2: Error() string (includes Message + Details)
+	errStr := apiErr.Error()
+	if strings.Contains(errStr, "generate_content_free_tier_requests") ||
+		strings.Contains(errStr, "Quota exceeded for metric") {
+		return true
+	}
+
+	// Check 3: Body field (raw response)
+	if strings.Contains(apiErr.Body, "generate_content_free_tier_requests") ||
+		strings.Contains(apiErr.Body, "generativelanguage.googleapis.com/generate_content") {
+		return true
+	}
+
+	// Check 4: Details field (structured error info)
+	if len(apiErr.Details) > 0 {
+		// Marshal Details to JSON string for searching
+		detailsJSON, err := json.Marshal(apiErr.Details)
+		if err == nil && strings.Contains(string(detailsJSON), "generate_content_free_tier_requests") {
+			return true
+		}
+	}
+
+	return false
+}
+
 // generateWithRetryForModel wraps GenerateContent with exponential backoff retry logic for a specific model
 func (g *GeminiClient) generateWithRetryForModel(ctx context.Context, prompt genai.Text, model *genai.GenerativeModel) (*genai.GenerateContentResponse, error) {
 	var lastErr error
@@ -161,11 +195,10 @@ func (g *GeminiClient) generateWithRetryForModel(ctx context.Context, prompt gen
 		// Check if it's a rate limit error (429)
 		if apiErr, ok := err.(*googleapi.Error); ok && apiErr.Code == 429 {
 			// Check if it's a daily quota error (not just per-minute rate limit)
-			errMsg := apiErr.Error()
-			if strings.Contains(errMsg, "generate_content_free_tier_requests") ||
-			   strings.Contains(errMsg, "current quota") {
+			if isDailyQuotaError(apiErr) {
 				// Daily quota exhausted - don't retry
-				log.Printf("Daily quota exhausted (250 requests/day limit). Processing will resume when quota resets.")
+				log.Printf("🚫 Daily quota exhausted (250 requests/day free tier limit)")
+				log.Printf("   Processing stopped. Quota resets in ~24 hours.")
 				return nil, &DailyQuotaExceededError{
 					Message: "Daily API quota exhausted (250 requests/day free tier limit). Quota resets in ~24 hours.",
 				}
@@ -179,7 +212,7 @@ func (g *GeminiClient) generateWithRetryForModel(ctx context.Context, prompt gen
 			// Calculate exponential backoff delay
 			backoffDelay := time.Duration(g.config.Gemini.BaseRetryDelay) * time.Second * (1 << uint(attempt))
 
-			log.Printf("Rate limit hit (429), retrying in %v (attempt %d/%d)", backoffDelay, attempt+1, g.config.Gemini.MaxRetries)
+			log.Printf("⏱️  Per-minute rate limit (10 RPM), retrying in %v (attempt %d/%d)", backoffDelay, attempt+1, g.config.Gemini.MaxRetries)
 
 			// Wait with backoff
 			select {
