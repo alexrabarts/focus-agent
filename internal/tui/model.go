@@ -67,21 +67,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q":
-			return m, tea.Quit
+		// Check if priorities view is in input mode
+		inInputMode := m.currentView == prioritiesView && m.prioritiesModel.IsInInputMode()
 
-		case "1":
-			m.currentView = tasksView
-			return m, m.tasksModel.fetchTasks()
+		// Only handle navigation keys when not in input mode
+		if !inInputMode {
+			switch msg.String() {
+			case "ctrl+c", "q":
+				return m, tea.Quit
 
-		case "2":
-			m.currentView = prioritiesView
-			return m, nil
+			case "left", "h":
+				// Move to previous tab
+				if m.currentView > 0 {
+					m.currentView--
+				} else {
+					m.currentView = statsView
+				}
+				return m, m.refreshCurrentView()
 
-		case "3":
-			m.currentView = statsView
-			return m, m.statsModel.fetchStats()
+			case "right", "l":
+				// Move to next tab
+				if m.currentView < statsView {
+					m.currentView++
+				} else {
+					m.currentView = tasksView
+				}
+				return m, m.refreshCurrentView()
+			}
+		} else {
+			// In input mode, only allow quit
+			if msg.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
 		}
 	}
 
@@ -97,6 +114,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, cmd
+}
+
+func (m Model) refreshCurrentView() tea.Cmd {
+	switch m.currentView {
+	case tasksView:
+		return m.tasksModel.fetchTasks()
+	case statsView:
+		return m.statsModel.fetchStats()
+	default:
+		return nil
+	}
 }
 
 func (m Model) View() string {
@@ -142,7 +170,7 @@ func (m Model) renderHeader() string {
 	title := titleStyle.Render("Focus Agent")
 
 	tabs := ""
-	for i, label := range []string{"1: Tasks", "2: Priorities", "3: Stats"} {
+	for i, label := range []string{"Tasks", "Priorities", "Stats"} {
 		if view(i) == m.currentView {
 			tabs += activeTabStyle.Render(label)
 		} else {
@@ -163,7 +191,7 @@ func (m Model) renderFooter() string {
 		Foreground(lipgloss.Color("241")).
 		Padding(0, 1)
 
-	return helpStyle.Render("q: quit | 1-3: switch views | ↑/↓: navigate | enter: select")
+	return helpStyle.Render("q: quit | ←/→: switch tabs | ↑/↓: navigate | enter: select")
 }
 
 func Start(database *db.DB, clients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config) error {

@@ -57,6 +57,10 @@ func NewPrioritiesModel(cfg *config.Config) PrioritiesModel {
 	}
 }
 
+func (m PrioritiesModel) IsInInputMode() bool {
+	return m.mode == addingMode || m.mode == editingMode
+}
+
 func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 	var cmd tea.Cmd
 
