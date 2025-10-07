@@ -81,6 +81,11 @@ api: build ## Run API server with scheduler (for remote TUI access)
 	@echo "Starting API server..."
 	@$(BINARY_PATH) -config $(CONFIG_DIR)/config.yaml -api
 
+.PHONY: ngrok
+ngrok: ## Run ngrok tunnel to expose API server
+	@echo "Starting ngrok tunnel..."
+	@ngrok start --config $(CONFIG_DIR)/ngrok.yaml --all
+
 .PHONY: test
 test: ## Run tests
 	@echo "Running tests..."
