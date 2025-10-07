@@ -145,12 +145,28 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
+			} else {
+				// At beginning of section, move to previous section
+				if m.currentSection == 0 {
+					m.currentSection = 3
+				} else {
+					m.currentSection--
+				}
+				// Move cursor to last item of new section
+				m.cursor = m.getSectionLength(m.currentSection) - 1
+				if m.cursor < 0 {
+					m.cursor = 0
+				}
 			}
 
 		case "down", "j":
 			maxCursor := m.getSectionLength(m.currentSection) - 1
 			if m.cursor < maxCursor {
 				m.cursor++
+			} else {
+				// At end of section, move to next section
+				m.currentSection = (m.currentSection + 1) % 4
+				m.cursor = 0
 			}
 
 		case "tab":
