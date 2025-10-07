@@ -188,7 +188,7 @@ func (m Model) renderHeader() string {
 	title := titleStyle.Render("Focus Agent")
 
 	tabs := ""
-	for i, label := range []string{"Tasks", "Priorities", "Stats", "Threads"} {
+	for i, label := range []string{"Tasks", "Priorities", "About", "Threads"} {
 		if view(i) == m.currentView {
 			tabs += activeTabStyle.Render(label)
 		} else {

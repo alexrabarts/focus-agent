@@ -122,7 +122,7 @@ func (m StatsModel) Update(msg tea.Msg) (StatsModel, tea.Cmd) {
 
 func (m StatsModel) View() string {
 	if m.loading {
-		return "Loading stats..."
+		return "Loading..."
 	}
 
 	if m.err != nil {
@@ -133,6 +133,25 @@ func (m StatsModel) View() string {
 	}
 
 	var b strings.Builder
+
+	// About section
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("39")).
+		Padding(0, 1)
+
+	descStyle := lipgloss.NewStyle().
+		Padding(0, 2)
+
+	b.WriteString(titleStyle.Render("🤖 Focus Agent") + "\n\n")
+	b.WriteString(descStyle.Render("A local AI productivity assistant that syncs with Google Workspace (Gmail,") + "\n")
+	b.WriteString(descStyle.Render("Drive, Calendar, Tasks), uses Gemini AI to process and prioritize work, and") + "\n")
+	b.WriteString(descStyle.Render("delivers strategic daily briefs.") + "\n\n")
+
+	b.WriteString(descStyle.Render("• AI-powered email summarization and task extraction") + "\n")
+	b.WriteString(descStyle.Render("• Strategic prioritization based on OKRs and key stakeholders") + "\n")
+	b.WriteString(descStyle.Render("• Automated daily briefs via Google Chat") + "\n")
+	b.WriteString(descStyle.Render("• Full-text search across all your workspace data") + "\n\n")
 
 	// Data Synced section
 	headerStyle := lipgloss.NewStyle().
