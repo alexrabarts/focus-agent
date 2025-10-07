@@ -17,8 +17,8 @@ type view int
 const (
 	tasksView view = iota
 	prioritiesView
-	statsView
 	threadsView
+	statsView
 )
 
 type Model struct {
@@ -93,13 +93,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.currentView > 0 {
 					m.currentView--
 				} else {
-					m.currentView = threadsView
+					m.currentView = statsView
 				}
 				return m, m.refreshCurrentView()
 
 			case "right", "l":
 				// Move to next tab
-				if m.currentView < threadsView {
+				if m.currentView < statsView {
 					m.currentView++
 				} else {
 					m.currentView = tasksView
@@ -188,7 +188,7 @@ func (m Model) renderHeader() string {
 	title := titleStyle.Render("Focus Agent")
 
 	tabs := ""
-	for i, label := range []string{"Tasks", "Priorities", "About", "Threads"} {
+	for i, label := range []string{"Tasks", "Priorities", "Threads", "About"} {
 		if view(i) == m.currentView {
 			tabs += activeTabStyle.Render(label)
 		} else {
