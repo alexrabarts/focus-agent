@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -392,7 +393,8 @@ func (s *Scheduler) ProcessNewMessages() {
 		summary, err := s.llm.SummarizeThreadWithModelSelection(s.ctx, messages, metadata)
 		if err != nil {
 			// Check if daily quota is exhausted
-			if _, ok := err.(*llm.DailyQuotaExceededError); ok {
+			var quotaErr *llm.DailyQuotaExceededError
+			if errors.As(err, &quotaErr) {
 				log.Printf("Daily quota exhausted. Stopping AI processing. %d/%d threads processed.", successCount, len(threadIDs))
 				break // Stop processing immediately
 			}
