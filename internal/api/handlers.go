@@ -44,6 +44,7 @@ type StatsResponse struct {
 	PendingTasks      int     `json:"pending_tasks"`
 	CompletedToday    int     `json:"completed_today"`
 	HighPriorityTasks int     `json:"high_priority_tasks"`
+	ThreadsNeedingAI  int     `json:"threads_needing_ai"`
 	LastGmailSync     *string `json:"last_gmail_sync,omitempty"`
 	LastDriveSync     *string `json:"last_drive_sync,omitempty"`
 	LastCalendarSync  *string `json:"last_calendar_sync,omitempty"`
@@ -237,6 +238,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	s.database.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&stats.TaskCount)
 	s.database.QueryRow("SELECT COUNT(*) FROM tasks WHERE status = 'pending'").Scan(&stats.PendingTasks)
 	s.database.QueryRow("SELECT COUNT(*) FROM tasks WHERE status = 'pending' AND score >= 4.0").Scan(&stats.HighPriorityTasks)
+	s.database.QueryRow("SELECT COUNT(*) FROM threads WHERE summary IS NULL OR summary = ''").Scan(&stats.ThreadsNeedingAI)
 
 	// Completed today
 	today := time.Now().Format("2006-01-02")

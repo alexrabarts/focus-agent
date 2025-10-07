@@ -27,6 +27,7 @@ type Stats struct {
 	PendingTasks      int
 	CompletedToday    int
 	HighPriorityTasks int
+	ThreadsNeedingAI  int        // Threads waiting for AI processing
 	LastGmailSync     *time.Time
 	LastDriveSync     *time.Time
 	LastCalendarSync  *time.Time
@@ -66,6 +67,7 @@ func (m StatsModel) fetchStats() tea.Cmd {
 		m.database.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&stats.TaskCount)
 		m.database.QueryRow("SELECT COUNT(*) FROM tasks WHERE status = 'pending'").Scan(&stats.PendingTasks)
 		m.database.QueryRow("SELECT COUNT(*) FROM tasks WHERE status = 'pending' AND score >= 4.0").Scan(&stats.HighPriorityTasks)
+		m.database.QueryRow("SELECT COUNT(*) FROM threads WHERE summary IS NULL OR summary = ''").Scan(&stats.ThreadsNeedingAI)
 
 		// Completed today
 		today := time.Now().Format("2006-01-02")

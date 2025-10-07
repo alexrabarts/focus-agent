@@ -65,6 +65,7 @@ type StatsResponse struct {
 	PendingTasks      int     `json:"pending_tasks"`
 	CompletedToday    int     `json:"completed_today"`
 	HighPriorityTasks int     `json:"high_priority_tasks"`
+	ThreadsNeedingAI  int     `json:"threads_needing_ai"`
 	LastGmailSync     *string `json:"last_gmail_sync,omitempty"`
 	LastDriveSync     *string `json:"last_drive_sync,omitempty"`
 	LastCalendarSync  *string `json:"last_calendar_sync,omitempty"`
@@ -265,6 +266,7 @@ func (c *APIClient) GetStats() (Stats, error) {
 		PendingTasks:      statsResp.PendingTasks,
 		CompletedToday:    statsResp.CompletedToday,
 		HighPriorityTasks: statsResp.HighPriorityTasks,
+		ThreadsNeedingAI:  statsResp.ThreadsNeedingAI,
 	}
 
 	// Parse sync times

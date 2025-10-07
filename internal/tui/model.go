@@ -230,9 +230,15 @@ func (m Model) renderFooter() string {
 
 	footer := "q: quit | ←/→: switch tabs | ↑/↓: navigate | enter: select"
 
+	// Add status information
+	stats := m.statsModel.stats
+	if stats.ThreadsNeedingAI > 0 {
+		footer += fmt.Sprintf(" | 📋 Queue: %d", stats.ThreadsNeedingAI)
+	}
+
 	// Add refresh indicator if auto-refresh is enabled
 	if m.config.TUI.AutoRefreshSeconds > 0 {
-		footer += fmt.Sprintf(" | ↻ Auto-refresh: %ds", m.config.TUI.AutoRefreshSeconds)
+		footer += fmt.Sprintf(" | ↻ %ds", m.config.TUI.AutoRefreshSeconds)
 	}
 
 	return helpStyle.Render(footer)
