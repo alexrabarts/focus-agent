@@ -1,0 +1,49 @@
+# Build artifacts
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Go workspace file
+go.work
+
+# Config files with secrets
+token.json
+config.yaml
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Log files
+*.log
+
+# Releases
+releases/
+
+# Backups
+backups/
+
+# OS-specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

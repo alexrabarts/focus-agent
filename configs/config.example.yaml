@@ -1,0 +1,114 @@
+# Focus Agent Configuration
+# Copy this file to ~/.focus-agent/config.yaml and update with your credentials
+
+# Database configuration
+database:
+  # Path to SQLite database file
+  path: ~/.focus-agent/data.db
+
+# Google API configuration
+google:
+  # OAuth 2.0 credentials from Google Cloud Console
+  # https://console.cloud.google.com/apis/credentials
+  client_id: YOUR_GOOGLE_CLIENT_ID_HERE
+  client_secret: YOUR_GOOGLE_CLIENT_SECRET_HERE
+
+  # Redirect URL for OAuth flow (keep as-is for local auth)
+  redirect_url: http://localhost:8080/callback
+
+  # Path to store OAuth token
+  token_file: ~/.focus-agent/token.json
+
+  # OAuth scopes (read-only by default for security)
+  scopes:
+    - https://www.googleapis.com/auth/gmail.readonly
+    - https://www.googleapis.com/auth/drive.readonly
+    - https://www.googleapis.com/auth/calendar.readonly
+    - https://www.googleapis.com/auth/tasks.readonly
+
+  # Polling intervals in minutes
+  polling_minutes:
+    gmail: 5        # Check Gmail every 5 minutes
+    drive: 10       # Check Drive every 10 minutes
+    calendar: 15    # Check Calendar every 15 minutes
+    tasks: 15       # Check Tasks every 15 minutes
+
+# Google Gemini AI configuration
+gemini:
+  # API key from Google AI Studio
+  # Get yours at: https://aistudio.google.com/app/apikey
+  api_key: YOUR_GEMINI_API_KEY_HERE
+
+  # Model to use (gemini-1.5-flash is efficient and cost-effective)
+  model: gemini-1.5-flash
+
+  # Maximum tokens per response
+  max_tokens: 2000
+
+  # Temperature for generation (0.0-1.0, lower is more focused)
+  temperature: 0.3
+
+  # Cache duration in hours (reduces API calls)
+  cache_hours: 24
+
+# Google Chat configuration for notifications
+chat:
+  # Webhook URL for sending messages to Google Chat
+  # Create at: https://developers.google.com/chat/how-tos/webhooks
+  webhook_url: YOUR_GOOGLE_CHAT_WEBHOOK_URL_HERE
+
+  # Space ID (optional, for threading messages)
+  space_id: YOUR_SPACE_ID
+
+  # Thread key for grouping messages
+  thread_key: focus-agent
+
+# Scheduling configuration
+schedule:
+  # Time for daily morning brief (24-hour format)
+  daily_brief_time: "07:45"
+
+  # Time for midday re-plan brief
+  replan_time: "13:00"
+
+  # Check for follow-ups every N minutes
+  followup_minutes: 60
+
+  # Timezone for scheduling (use IANA timezone names)
+  # List: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+  timezone: America/Los_Angeles
+
+# Task prioritization settings
+planner:
+  # Scoring weights (should sum to approximately 1.0)
+  weights:
+    impact: 0.4        # Weight for task impact (1-5 scale)
+    urgency: 0.35      # Weight for urgency (based on due date)
+    stakeholder: 0.15  # Weight for stakeholder importance
+    effort: 0.1        # Weight for effort (negative factor)
+
+  # Maximum tasks to include in daily brief
+  max_tasks_per_brief: 10
+
+  # Duration of focus blocks in hours
+  focus_block_hours: 2
+
+# Advanced settings (optional)
+advanced:
+  # Enable debug logging
+  debug: false
+
+  # Maximum concurrent API requests
+  max_concurrent_requests: 5
+
+  # Retry failed API calls
+  retry_attempts: 3
+
+  # Timeout for API calls in seconds
+  api_timeout: 30
+
+  # Enable experimental features
+  experimental_features:
+    auto_reply_drafts: false    # Automatically draft replies
+    meeting_prep: false          # Generate meeting prep docs
+    weekly_summary: false        # Weekly summary reports
