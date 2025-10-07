@@ -26,6 +26,7 @@ type inputMode int
 const (
 	normalMode inputMode = iota
 	addingMode
+	editingMode
 )
 
 type PrioritiesModel struct {
@@ -35,6 +36,7 @@ type PrioritiesModel struct {
 	cursor       int
 	mode         inputMode
 	textInput    textinput.Model
+	editingIndex int
 	modified     bool
 	message      string
 }
@@ -58,7 +60,7 @@ func NewPrioritiesModel(cfg *config.Config) PrioritiesModel {
 func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 	var cmd tea.Cmd
 
-	// Handle input mode
+	// Handle adding mode
 	if m.mode == addingMode {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
@@ -78,6 +80,38 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 
 			case "esc":
 				// Cancel adding
+				m.mode = normalMode
+				m.textInput.SetValue("")
+				m.textInput.Blur()
+				return m, nil
+			}
+		}
+
+		// Update text input
+		m.textInput, cmd = m.textInput.Update(msg)
+		return m, cmd
+	}
+
+	// Handle editing mode
+	if m.mode == editingMode {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "enter":
+				// Update the item
+				value := strings.TrimSpace(m.textInput.Value())
+				if value != "" {
+					m.updatePriority(m.editingIndex, value)
+					m.modified = true
+					m.message = "Priority updated. Press 's' to save changes."
+				}
+				m.mode = normalMode
+				m.textInput.SetValue("")
+				m.textInput.Blur()
+				return m, nil
+
+			case "esc":
+				// Cancel editing
 				m.mode = normalMode
 				m.textInput.SetValue("")
 				m.textInput.Blur()
@@ -119,9 +153,22 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 			}
 			m.cursor = 0
 
+		case "enter":
+			// Start editing mode
+			if currentValue := m.getCurrentPriorityValue(); currentValue != "" {
+				m.mode = editingMode
+				m.editingIndex = m.cursor
+				m.textInput.SetValue(currentValue)
+				m.textInput.Focus()
+				// Position cursor at end
+				m.textInput.CursorEnd()
+				return m, textinput.Blink
+			}
+
 		case "a":
 			// Start adding mode
 			m.mode = addingMode
+			m.textInput.SetValue("")
 			m.textInput.Focus()
 			return m, textinput.Blink
 
@@ -164,6 +211,49 @@ func (m *PrioritiesModel) addPriority(value string) {
 	case stakeholdersSection:
 		m.config.Priorities.KeyStakeholders = append(m.config.Priorities.KeyStakeholders, value)
 	}
+}
+
+func (m *PrioritiesModel) updatePriority(index int, value string) {
+	switch m.currentSection {
+	case okrsSection:
+		if index < len(m.config.Priorities.OKRs) {
+			m.config.Priorities.OKRs[index] = value
+		}
+	case focusAreasSection:
+		if index < len(m.config.Priorities.FocusAreas) {
+			m.config.Priorities.FocusAreas[index] = value
+		}
+	case projectsSection:
+		if index < len(m.config.Priorities.KeyProjects) {
+			m.config.Priorities.KeyProjects[index] = value
+		}
+	case stakeholdersSection:
+		if index < len(m.config.Priorities.KeyStakeholders) {
+			m.config.Priorities.KeyStakeholders[index] = value
+		}
+	}
+}
+
+func (m PrioritiesModel) getCurrentPriorityValue() string {
+	switch m.currentSection {
+	case okrsSection:
+		if m.cursor < len(m.config.Priorities.OKRs) {
+			return m.config.Priorities.OKRs[m.cursor]
+		}
+	case focusAreasSection:
+		if m.cursor < len(m.config.Priorities.FocusAreas) {
+			return m.config.Priorities.FocusAreas[m.cursor]
+		}
+	case projectsSection:
+		if m.cursor < len(m.config.Priorities.KeyProjects) {
+			return m.config.Priorities.KeyProjects[m.cursor]
+		}
+	case stakeholdersSection:
+		if m.cursor < len(m.config.Priorities.KeyStakeholders) {
+			return m.config.Priorities.KeyStakeholders[m.cursor]
+		}
+	}
+	return ""
 }
 
 func (m *PrioritiesModel) deletePriority() bool {
@@ -265,7 +355,7 @@ func (m PrioritiesModel) View() string {
 	m.renderSection(&b, "🚀 Key Projects", projectsSection, m.config.Priorities.KeyProjects)
 	m.renderSection(&b, "👥 Key Stakeholders", stakeholdersSection, m.config.Priorities.KeyStakeholders)
 
-	// Input field when adding
+	// Input field when adding or editing
 	if m.mode == addingMode {
 		inputStyle := lipgloss.NewStyle().
 			Padding(0, 2).
@@ -274,6 +364,14 @@ func (m PrioritiesModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(inputStyle.Render("➕ Add new: ") + m.textInput.View() + "\n")
 		b.WriteString(contentStyle.Render("Press Enter to add, Esc to cancel\n"))
+	} else if m.mode == editingMode {
+		inputStyle := lipgloss.NewStyle().
+			Padding(0, 2).
+			Foreground(lipgloss.Color("226"))
+
+		b.WriteString("\n")
+		b.WriteString(inputStyle.Render("✏️  Edit: ") + m.textInput.View() + "\n")
+		b.WriteString(contentStyle.Render("Press Enter to save, Esc to cancel\n"))
 	}
 
 	// Status message
@@ -290,7 +388,7 @@ func (m PrioritiesModel) View() string {
 		Foreground(lipgloss.Color("241")).
 		Padding(1, 0, 0, 2)
 
-	helpText := "tab: switch sections | a: add | d: delete | s: save"
+	helpText := "tab: switch sections | enter: edit | a: add | d: delete | s: save"
 	if m.modified {
 		helpText += " | ⚠️  Unsaved changes!"
 	}
