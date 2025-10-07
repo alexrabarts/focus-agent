@@ -94,8 +94,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		// Auto-refresh current view and schedule next tick
-		return m, tea.Batch(m.refreshCurrentView(), tick(m.config))
+		// Auto-refresh current view and stats (for footer), then schedule next tick
+		return m, tea.Batch(
+			m.refreshCurrentView(),
+			m.statsModel.fetchStats(), // Always refresh stats for footer queue count
+			tick(m.config),
+		)
 
 	case tea.KeyMsg:
 		// Check if priorities view is in input mode
@@ -133,7 +137,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Update current view
+	// Always update stats model (for footer), then update current view
+	m.statsModel, _ = m.statsModel.Update(msg)
+
 	var cmd tea.Cmd
 	switch m.currentView {
 	case tasksView:
@@ -141,7 +147,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case prioritiesView:
 		m.prioritiesModel, cmd = m.prioritiesModel.Update(msg)
 	case statsView:
-		m.statsModel, cmd = m.statsModel.Update(msg)
+		// Already updated above
 	case threadsView:
 		m.threadsModel, cmd = m.threadsModel.Update(msg)
 	}
