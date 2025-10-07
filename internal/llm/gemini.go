@@ -139,6 +139,15 @@ func (g *GeminiClient) generateWithRetry(ctx context.Context, prompt genai.Text)
 	return g.generateWithRetryForModel(ctx, prompt, g.model)
 }
 
+// DailyQuotaExceededError is returned when the daily API quota is exhausted
+type DailyQuotaExceededError struct {
+	Message string
+}
+
+func (e *DailyQuotaExceededError) Error() string {
+	return e.Message
+}
+
 // generateWithRetryForModel wraps GenerateContent with exponential backoff retry logic for a specific model
 func (g *GeminiClient) generateWithRetryForModel(ctx context.Context, prompt genai.Text, model *genai.GenerativeModel) (*genai.GenerateContentResponse, error) {
 	var lastErr error
@@ -151,6 +160,18 @@ func (g *GeminiClient) generateWithRetryForModel(ctx context.Context, prompt gen
 
 		// Check if it's a rate limit error (429)
 		if apiErr, ok := err.(*googleapi.Error); ok && apiErr.Code == 429 {
+			// Check if it's a daily quota error (not just per-minute rate limit)
+			errMsg := apiErr.Error()
+			if strings.Contains(errMsg, "generate_content_free_tier_requests") ||
+			   strings.Contains(errMsg, "current quota") {
+				// Daily quota exhausted - don't retry
+				log.Printf("Daily quota exhausted (250 requests/day limit). Processing will resume when quota resets.")
+				return nil, &DailyQuotaExceededError{
+					Message: "Daily API quota exhausted (250 requests/day free tier limit). Quota resets in ~24 hours.",
+				}
+			}
+
+			// Per-minute rate limit - retry with backoff
 			if !g.config.Gemini.RetryOnRateLimit || attempt >= g.config.Gemini.MaxRetries {
 				return nil, err
 			}

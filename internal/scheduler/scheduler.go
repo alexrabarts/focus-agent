@@ -391,6 +391,11 @@ func (s *Scheduler) ProcessNewMessages() {
 		// Generate summary with smart model selection
 		summary, err := s.llm.SummarizeThreadWithModelSelection(s.ctx, messages, metadata)
 		if err != nil {
+			// Check if daily quota is exhausted
+			if _, ok := err.(*llm.DailyQuotaExceededError); ok {
+				log.Printf("Daily quota exhausted. Stopping AI processing. %d/%d threads processed.", successCount, len(threadIDs))
+				break // Stop processing immediately
+			}
 			log.Printf("Failed to summarize thread %s: %v", threadID, err)
 			continue
 		}
