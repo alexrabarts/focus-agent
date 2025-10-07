@@ -27,6 +27,7 @@ const (
 	normalMode inputMode = iota
 	addingMode
 	editingMode
+	reorderingMode
 )
 
 type PrioritiesModel struct {
@@ -60,7 +61,7 @@ func NewPrioritiesModel(cfg *config.Config, apiClient *APIClient) PrioritiesMode
 }
 
 func (m PrioritiesModel) IsInInputMode() bool {
-	return m.mode == addingMode || m.mode == editingMode
+	return m.mode == addingMode || m.mode == editingMode || m.mode == reorderingMode
 }
 
 func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
@@ -138,6 +139,57 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Handle reordering mode
+	if m.mode == reorderingMode {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "enter":
+				// Parse the position
+				value := strings.TrimSpace(m.textInput.Value())
+				if value != "" {
+					newPos, err := fmt.Sscanf(value, "%d", new(int))
+					var position int
+					if err == nil && newPos == 1 {
+						fmt.Sscanf(value, "%d", &position)
+						// Convert to 0-based index
+						position--
+						sectionLen := m.getSectionLength(m.currentSection)
+						if position >= 0 && position < sectionLen {
+							m.saveStateForUndo()
+							m.reorderPriority(m.cursor, position)
+							if err := m.saveConfig(); err != nil {
+								m.message = fmt.Sprintf("Error saving: %v", err)
+							} else {
+								m.message = fmt.Sprintf("Moved to position %d", position+1)
+								m.cursor = position
+							}
+						} else {
+							m.message = fmt.Sprintf("Invalid position (must be 1-%d)", sectionLen)
+						}
+					} else {
+						m.message = "Invalid number"
+					}
+				}
+				m.mode = normalMode
+				m.textInput.SetValue("")
+				m.textInput.Blur()
+				return m, nil
+
+			case "esc":
+				// Cancel reordering
+				m.mode = normalMode
+				m.textInput.SetValue("")
+				m.textInput.Blur()
+				return m, nil
+			}
+		}
+
+		// Update text input
+		m.textInput, cmd = m.textInput.Update(msg)
+		return m, cmd
+	}
+
 	// Normal mode
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -201,6 +253,16 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 			m.textInput.SetValue("")
 			m.textInput.Focus()
 			return m, textinput.Blink
+
+		case "o":
+			// Start reordering mode
+			if m.getSectionLength(m.currentSection) > 0 {
+				m.mode = reorderingMode
+				m.textInput.SetValue("")
+				m.textInput.Placeholder = fmt.Sprintf("Enter position (1-%d)...", m.getSectionLength(m.currentSection))
+				m.textInput.Focus()
+				return m, textinput.Blink
+			}
 
 		case "d", "delete", "backspace":
 			// Delete current item
@@ -339,6 +401,65 @@ func (m *PrioritiesModel) deletePriority() bool {
 	return false
 }
 
+func (m *PrioritiesModel) reorderPriority(oldPos, newPos int) {
+	if oldPos == newPos {
+		return
+	}
+
+	switch m.currentSection {
+	case okrsSection:
+		if oldPos < len(m.config.Priorities.OKRs) && newPos < len(m.config.Priorities.OKRs) {
+			item := m.config.Priorities.OKRs[oldPos]
+			// Remove from old position
+			m.config.Priorities.OKRs = append(
+				m.config.Priorities.OKRs[:oldPos],
+				m.config.Priorities.OKRs[oldPos+1:]...,
+			)
+			// Insert at new position
+			m.config.Priorities.OKRs = append(
+				m.config.Priorities.OKRs[:newPos],
+				append([]string{item}, m.config.Priorities.OKRs[newPos:]...)...,
+			)
+		}
+	case focusAreasSection:
+		if oldPos < len(m.config.Priorities.FocusAreas) && newPos < len(m.config.Priorities.FocusAreas) {
+			item := m.config.Priorities.FocusAreas[oldPos]
+			m.config.Priorities.FocusAreas = append(
+				m.config.Priorities.FocusAreas[:oldPos],
+				m.config.Priorities.FocusAreas[oldPos+1:]...,
+			)
+			m.config.Priorities.FocusAreas = append(
+				m.config.Priorities.FocusAreas[:newPos],
+				append([]string{item}, m.config.Priorities.FocusAreas[newPos:]...)...,
+			)
+		}
+	case projectsSection:
+		if oldPos < len(m.config.Priorities.KeyProjects) && newPos < len(m.config.Priorities.KeyProjects) {
+			item := m.config.Priorities.KeyProjects[oldPos]
+			m.config.Priorities.KeyProjects = append(
+				m.config.Priorities.KeyProjects[:oldPos],
+				m.config.Priorities.KeyProjects[oldPos+1:]...,
+			)
+			m.config.Priorities.KeyProjects = append(
+				m.config.Priorities.KeyProjects[:newPos],
+				append([]string{item}, m.config.Priorities.KeyProjects[newPos:]...)...,
+			)
+		}
+	case stakeholdersSection:
+		if oldPos < len(m.config.Priorities.KeyStakeholders) && newPos < len(m.config.Priorities.KeyStakeholders) {
+			item := m.config.Priorities.KeyStakeholders[oldPos]
+			m.config.Priorities.KeyStakeholders = append(
+				m.config.Priorities.KeyStakeholders[:oldPos],
+				m.config.Priorities.KeyStakeholders[oldPos+1:]...,
+			)
+			m.config.Priorities.KeyStakeholders = append(
+				m.config.Priorities.KeyStakeholders[:newPos],
+				append([]string{item}, m.config.Priorities.KeyStakeholders[newPos:]...)...,
+			)
+		}
+	}
+}
+
 func (m PrioritiesModel) getSectionLength(section prioritySection) int {
 	switch section {
 	case okrsSection:
@@ -406,7 +527,7 @@ func (m PrioritiesModel) View() string {
 	m.renderSection(&b, "🚀 Key Projects", projectsSection, m.config.Priorities.KeyProjects)
 	m.renderSection(&b, "👥 Key Stakeholders", stakeholdersSection, m.config.Priorities.KeyStakeholders)
 
-	// Input field when adding or editing
+	// Input field when adding, editing, or reordering
 	if m.mode == addingMode {
 		inputStyle := lipgloss.NewStyle().
 			Padding(0, 2).
@@ -423,6 +544,14 @@ func (m PrioritiesModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(inputStyle.Render("✏️  Edit: ") + m.textInput.View() + "\n")
 		b.WriteString(contentStyle.Render("Press Enter to save, Esc to cancel\n"))
+	} else if m.mode == reorderingMode {
+		inputStyle := lipgloss.NewStyle().
+			Padding(0, 2).
+			Foreground(lipgloss.Color("63"))
+
+		b.WriteString("\n")
+		b.WriteString(inputStyle.Render("🔢 Move to position: ") + m.textInput.View() + "\n")
+		b.WriteString(contentStyle.Render("Press Enter to move, Esc to cancel\n"))
 	}
 
 	// Status message
@@ -439,7 +568,7 @@ func (m PrioritiesModel) View() string {
 		Foreground(lipgloss.Color("241")).
 		Padding(1, 0, 0, 2)
 
-	helpText := "tab: switch sections | enter: edit | a: add | d: delete | u: undo"
+	helpText := "tab: switch sections | enter: edit | a: add | o: reorder | d: delete | u: undo"
 	if m.previousPriorities != nil {
 		helpText += " | ↶ Undo available"
 	}
