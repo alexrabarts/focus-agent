@@ -12,13 +12,14 @@ import (
 )
 
 type TasksModel struct {
-	database  *db.DB
-	planner   *planner.Planner
-	apiClient *APIClient
-	tasks     []*db.Task
-	cursor    int
-	loading   bool
-	err       error
+	database            *db.DB
+	planner             *planner.Planner
+	apiClient           *APIClient
+	tasks               []*db.Task
+	cursor              int
+	loading             bool
+	err                 error
+	lastCompletedTaskID string
 }
 
 type tasksLoadedMsg struct {
@@ -74,7 +75,15 @@ func (m TasksModel) Update(msg tea.Msg) (TasksModel, tea.Cmd) {
 			// Complete task
 			if m.cursor < len(m.tasks) {
 				task := m.tasks[m.cursor]
+				m.lastCompletedTaskID = task.ID // Store for undo
 				return m, m.completeTask(task)
+			}
+		case "u":
+			// Undo last completion
+			if m.lastCompletedTaskID != "" {
+				taskID := m.lastCompletedTaskID
+				m.lastCompletedTaskID = "" // Clear undo state
+				return m, m.uncompleteTask(taskID)
 			}
 		case "r":
 			// Refresh tasks
@@ -104,6 +113,35 @@ func (m TasksModel) completeTask(task *db.Task) tea.Cmd {
 		}
 
 		// Refetch tasks after completion
+		var tasks []*db.Task
+		if m.apiClient != nil {
+			tasks, err = m.apiClient.GetTasks()
+		} else {
+			tasks, err = m.database.GetPendingTasks(50)
+		}
+
+		return tasksLoadedMsg{tasks: tasks, err: err}
+	}
+}
+
+func (m TasksModel) uncompleteTask(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+
+		if m.apiClient != nil {
+			// Use remote API
+			err = m.apiClient.UncompleteTask(taskID)
+		} else {
+			// Use local planner
+			ctx := context.Background()
+			err = m.planner.UncompleteTask(ctx, taskID)
+		}
+
+		if err != nil {
+			return tasksLoadedMsg{err: err}
+		}
+
+		// Refetch tasks after uncompleting
 		var tasks []*db.Task
 		if m.apiClient != nil {
 			tasks, err = m.apiClient.GetTasks()
@@ -203,7 +241,11 @@ func (m TasksModel) View() string {
 		Padding(1, 0, 0, 1)
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("enter: complete task | r: refresh"))
+	helpText := "enter: complete task | r: refresh"
+	if m.lastCompletedTaskID != "" {
+		helpText += " | u: undo"
+	}
+	b.WriteString(helpStyle.Render(helpText))
 
 	return b.String()
 }

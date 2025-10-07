@@ -475,6 +475,18 @@ func (p *Planner) CompleteTask(ctx context.Context, taskID string) error {
 	return p.PrioritizeTasks(ctx)
 }
 
+// UncompleteTask marks a task as pending (undo completion)
+func (p *Planner) UncompleteTask(ctx context.Context, taskID string) error {
+	query := `UPDATE tasks SET status = 'pending', completed_at = NULL WHERE id = ?`
+
+	if _, err := p.db.Exec(query, taskID); err != nil {
+		return fmt.Errorf("failed to uncomplete task: %w", err)
+	}
+
+	// Trigger re-prioritization
+	return p.PrioritizeTasks(ctx)
+}
+
 // SnoozeTask defers a task to a later time
 func (p *Planner) SnoozeTask(ctx context.Context, taskID string, until time.Time) error {
 	// Update due date

@@ -118,34 +118,49 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/tasks/:id/complete - Complete a task
+// POST /api/tasks/:id/uncomplete - Uncomplete a task (undo)
 func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
-	// Extract task ID from path
+	// Extract task ID and action from path
 	path := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
 	parts := strings.Split(path, "/")
-	if len(parts) < 2 || parts[1] != "complete" {
+	if len(parts) < 2 {
 		writeError(w, http.StatusBadRequest, "Invalid path")
 		return
 	}
 
 	taskID := parts[0]
+	action := parts[1]
+
 	if taskID == "" {
 		writeError(w, http.StatusBadRequest, "Invalid task ID")
 		return
 	}
 
-	// Complete the task
 	ctx := context.Background()
-	if err := s.planner.CompleteTask(ctx, taskID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "completed"})
+	switch action {
+	case "complete":
+		if err := s.planner.CompleteTask(ctx, taskID); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "completed"})
+
+	case "uncomplete":
+		if err := s.planner.UncompleteTask(ctx, taskID); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "pending"})
+
+	default:
+		writeError(w, http.StatusBadRequest, "Invalid action")
+	}
 }
 
 // GET /api/priorities - Get all priorities

@@ -193,6 +193,17 @@ func (c *APIClient) CompleteTask(taskID string) error {
 	return nil
 }
 
+// UncompleteTask marks a task as pending via the remote API (undo completion)
+func (c *APIClient) UncompleteTask(taskID string) error {
+	path := fmt.Sprintf("/api/tasks/%s/uncomplete", taskID)
+	resp, err := c.doRequest("POST", path, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
 // GetPriorities fetches priorities from the remote API
 func (c *APIClient) GetPriorities() (*config.Priorities, error) {
 	resp, err := c.doRequest("GET", "/api/priorities", nil)
