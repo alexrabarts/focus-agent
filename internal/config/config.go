@@ -13,6 +13,8 @@ type Config struct {
 	Google     Google     `yaml:"google"`
 	Gemini     Gemini     `yaml:"gemini"`
 	Chat       Chat       `yaml:"chat"`
+	API        API        `yaml:"api"`
+	Remote     Remote     `yaml:"remote"`
 	Schedule   Schedule   `yaml:"schedule"`
 	Planner    Planner    `yaml:"planner"`
 	Limits     Limits     `yaml:"limits"`
@@ -49,6 +51,17 @@ type Chat struct {
 	WebhookURL     string `yaml:"webhook_url"`
 	SpaceID        string `yaml:"space_id"`
 	ThreadKey      string `yaml:"thread_key"`
+}
+
+type API struct {
+	Enabled bool   `yaml:"enabled"`
+	Port    int    `yaml:"port"`
+	AuthKey string `yaml:"auth_key"`
+}
+
+type Remote struct {
+	URL     string `yaml:"url"`
+	AuthKey string `yaml:"auth_key"`
 }
 
 type Schedule struct {
@@ -190,6 +203,11 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Gemini.CacheHours == 0 {
 		cfg.Gemini.CacheHours = 24
+	}
+
+	// API defaults
+	if cfg.API.Port == 0 {
+		cfg.API.Port = 8081
 	}
 
 	// Schedule defaults

@@ -76,6 +76,11 @@ tui: build ## Run interactive TUI (Terminal User Interface)
 	@echo "Starting TUI..."
 	@$(BINARY_PATH) -config $(CONFIG_DIR)/config.yaml -tui
 
+.PHONY: api
+api: build ## Run API server with scheduler (for remote TUI access)
+	@echo "Starting API server..."
+	@$(BINARY_PATH) -config $(CONFIG_DIR)/config.yaml -api
+
 .PHONY: test
 test: ## Run tests
 	@echo "Running tests..."

@@ -5,11 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/alexrabarts/focus-agent/internal/api"
 	"github.com/alexrabarts/focus-agent/internal/config"
 	"github.com/alexrabarts/focus-agent/internal/db"
 	"github.com/alexrabarts/focus-agent/internal/google"
@@ -25,6 +27,7 @@ var (
 	processOnly = flag.Bool("process", false, "Process threads with AI and exit")
 	authOnly    = flag.Bool("auth", false, "Run OAuth flow only")
 	briefOnly   = flag.Bool("brief", false, "Generate and send brief immediately")
+	apiMode     = flag.Bool("api", false, "Run API server with scheduler (for remote TUI access)")
 	tuiMode     = flag.Bool("tui", false, "Run interactive TUI (Terminal User Interface)")
 	version     = flag.Bool("version", false, "Show version")
 )
@@ -110,6 +113,22 @@ func main() {
 			log.Fatalf("TUI error: %v", err)
 		}
 		os.Exit(0)
+	}
+
+	// Handle API mode or if API is enabled in config
+	if *apiMode || cfg.API.Enabled {
+		// Start API server in background
+		apiServer := api.NewServer(database, googleClients, llmClient, plannerService, cfg)
+
+		go func() {
+			log.Printf("API server starting on port %d", cfg.API.Port)
+			if err := apiServer.Start(cfg.API.Port); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("API server error: %v", err)
+			}
+		}()
+
+		// If -api flag is set, run scheduler + API server together
+		// If just config enabled, continue to scheduler below
 	}
 
 	// Initialize scheduler

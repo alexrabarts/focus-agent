@@ -31,6 +31,7 @@ type Model struct {
 	llm       *llm.GeminiClient
 	planner   *planner.Planner
 	config    *config.Config
+	apiClient *APIClient
 
 	// Sub-models
 	tasksModel      TasksModel
@@ -39,6 +40,12 @@ type Model struct {
 }
 
 func NewModel(database *db.DB, clients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config) Model {
+	// Initialize API client if remote mode is configured
+	var apiClient *APIClient
+	if cfg.Remote.URL != "" {
+		apiClient = NewAPIClient(cfg)
+	}
+
 	return Model{
 		currentView:     tasksView,
 		database:        database,
@@ -46,9 +53,10 @@ func NewModel(database *db.DB, clients *google.Clients, llmClient *llm.GeminiCli
 		llm:             llmClient,
 		planner:         plannerService,
 		config:          cfg,
-		tasksModel:      NewTasksModel(database, plannerService),
-		prioritiesModel: NewPrioritiesModel(cfg),
-		statsModel:      NewStatsModel(database),
+		apiClient:       apiClient,
+		tasksModel:      NewTasksModel(database, plannerService, apiClient),
+		prioritiesModel: NewPrioritiesModel(cfg, apiClient),
+		statsModel:      NewStatsModel(database, apiClient),
 	}
 }
 

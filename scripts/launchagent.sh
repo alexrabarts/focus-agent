@@ -45,6 +45,7 @@ create_plist() {
         <string>${BINARY_PATH}</string>
         <string>-config</string>
         <string>${CONFIG_PATH}</string>
+        <string>-api</string>
     </array>
 
     <key>RunAtLoad</key>

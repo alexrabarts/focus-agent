@@ -32,6 +32,7 @@ const (
 type PrioritiesModel struct {
 	config             *config.Config
 	configPath         string
+	apiClient          *APIClient
 	currentSection     prioritySection
 	cursor             int
 	mode               inputMode
@@ -41,7 +42,7 @@ type PrioritiesModel struct {
 	message            string
 }
 
-func NewPrioritiesModel(cfg *config.Config) PrioritiesModel {
+func NewPrioritiesModel(cfg *config.Config, apiClient *APIClient) PrioritiesModel {
 	ti := textinput.New()
 	ti.Placeholder = "Enter new priority..."
 	ti.CharLimit = 200
@@ -49,6 +50,7 @@ func NewPrioritiesModel(cfg *config.Config) PrioritiesModel {
 	return PrioritiesModel{
 		config:             cfg,
 		configPath:         os.ExpandEnv("$HOME/.focus-agent/config.yaml"),
+		apiClient:          apiClient,
 		currentSection:     okrsSection,
 		cursor:             0,
 		mode:               normalMode,
@@ -336,6 +338,12 @@ func (m PrioritiesModel) getSectionLength(section prioritySection) int {
 }
 
 func (m PrioritiesModel) saveConfig() error {
+	if m.apiClient != nil {
+		// Use remote API
+		return m.apiClient.UpdatePriorities(&m.config.Priorities)
+	}
+
+	// Local mode: write to config file
 	// Read the current config file
 	data, err := os.ReadFile(m.configPath)
 	if err != nil {

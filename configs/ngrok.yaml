@@ -1,0 +1,8 @@
+version: "2"
+authtoken: 33js5ltT17HbW2aNw49c4QSFusJ_2QHPTneebBa1cC77vRBkC
+
+tunnels:
+  focus-agent:
+    proto: http
+    addr: 8081
+    domain: noncondescendingly-anteroparietal-tyesha.ngrok-free.dev

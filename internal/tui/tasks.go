@@ -12,12 +12,13 @@ import (
 )
 
 type TasksModel struct {
-	database *db.DB
-	planner  *planner.Planner
-	tasks    []*db.Task
-	cursor   int
-	loading  bool
-	err      error
+	database  *db.DB
+	planner   *planner.Planner
+	apiClient *APIClient
+	tasks     []*db.Task
+	cursor    int
+	loading   bool
+	err       error
 }
 
 type tasksLoadedMsg struct {
@@ -25,17 +26,28 @@ type tasksLoadedMsg struct {
 	err   error
 }
 
-func NewTasksModel(database *db.DB, planner *planner.Planner) TasksModel {
+func NewTasksModel(database *db.DB, planner *planner.Planner, apiClient *APIClient) TasksModel {
 	return TasksModel{
-		database: database,
-		planner:  planner,
-		loading:  true,
+		database:  database,
+		planner:   planner,
+		apiClient: apiClient,
+		loading:   true,
 	}
 }
 
 func (m TasksModel) fetchTasks() tea.Cmd {
 	return func() tea.Msg {
-		tasks, err := m.database.GetPendingTasks(50)
+		var tasks []*db.Task
+		var err error
+
+		if m.apiClient != nil {
+			// Use remote API
+			tasks, err = m.apiClient.GetTasks()
+		} else {
+			// Use local database
+			tasks, err = m.database.GetPendingTasks(50)
+		}
+
 		return tasksLoadedMsg{tasks: tasks, err: err}
 	}
 }
@@ -76,12 +88,29 @@ func (m TasksModel) Update(msg tea.Msg) (TasksModel, tea.Cmd) {
 
 func (m TasksModel) completeTask(task *db.Task) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if err := m.planner.CompleteTask(ctx, task.ID); err != nil {
+		var err error
+
+		if m.apiClient != nil {
+			// Use remote API
+			err = m.apiClient.CompleteTask(task.ID)
+		} else {
+			// Use local planner
+			ctx := context.Background()
+			err = m.planner.CompleteTask(ctx, task.ID)
+		}
+
+		if err != nil {
 			return tasksLoadedMsg{err: err}
 		}
+
 		// Refetch tasks after completion
-		tasks, err := m.database.GetPendingTasks(50)
+		var tasks []*db.Task
+		if m.apiClient != nil {
+			tasks, err = m.apiClient.GetTasks()
+		} else {
+			tasks, err = m.database.GetPendingTasks(50)
+		}
+
 		return tasksLoadedMsg{tasks: tasks, err: err}
 	}
 }

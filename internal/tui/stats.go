@@ -11,25 +11,26 @@ import (
 )
 
 type StatsModel struct {
-	database *db.DB
-	stats    Stats
-	loading  bool
-	err      error
+	database  *db.DB
+	apiClient *APIClient
+	stats     Stats
+	loading   bool
+	err       error
 }
 
 type Stats struct {
-	ThreadCount      int
-	MessageCount     int
-	DocCount         int
-	EventCount       int
-	TaskCount        int
-	PendingTasks     int
-	CompletedToday   int
+	ThreadCount       int
+	MessageCount      int
+	DocCount          int
+	EventCount        int
+	TaskCount         int
+	PendingTasks      int
+	CompletedToday    int
 	HighPriorityTasks int
-	LastGmailSync    *time.Time
-	LastDriveSync    *time.Time
-	LastCalendarSync *time.Time
-	LastTasksSync    *time.Time
+	LastGmailSync     *time.Time
+	LastDriveSync     *time.Time
+	LastCalendarSync  *time.Time
+	LastTasksSync     *time.Time
 }
 
 type statsLoadedMsg struct {
@@ -37,17 +38,26 @@ type statsLoadedMsg struct {
 	err   error
 }
 
-func NewStatsModel(database *db.DB) StatsModel {
+func NewStatsModel(database *db.DB, apiClient *APIClient) StatsModel {
 	return StatsModel{
-		database: database,
-		loading:  true,
+		database:  database,
+		apiClient: apiClient,
+		loading:   true,
 	}
 }
 
 func (m StatsModel) fetchStats() tea.Cmd {
 	return func() tea.Msg {
 		var stats Stats
+		var err error
 
+		if m.apiClient != nil {
+			// Use remote API
+			stats, err = m.apiClient.GetStats()
+			return statsLoadedMsg{stats: stats, err: err}
+		}
+
+		// Local mode: query database
 		// Count records
 		m.database.QueryRow("SELECT COUNT(*) FROM threads").Scan(&stats.ThreadCount)
 		m.database.QueryRow("SELECT COUNT(*) FROM messages").Scan(&stats.MessageCount)
@@ -63,7 +73,7 @@ func (m StatsModel) fetchStats() tea.Cmd {
 
 		// Last sync times (from sync_status table if it exists)
 		var gmailSyncStr, driveSyncStr, calendarSyncStr, tasksSyncStr string
-		err := m.database.QueryRow("SELECT last_sync FROM sync_status WHERE source = 'gmail' ORDER BY last_sync DESC LIMIT 1").Scan(&gmailSyncStr)
+		err = m.database.QueryRow("SELECT last_sync FROM sync_status WHERE source = 'gmail' ORDER BY last_sync DESC LIMIT 1").Scan(&gmailSyncStr)
 		if err == nil {
 			t, _ := time.Parse(time.RFC3339, gmailSyncStr)
 			stats.LastGmailSync = &t

@@ -63,6 +63,27 @@ chat:
   # Thread key for grouping messages
   thread_key: focus-agent
 
+# API Server configuration (for remote TUI access)
+api:
+  # Enable API server
+  enabled: false
+
+  # Port to listen on
+  port: 8081
+
+  # Authentication key for API access
+  # Generate with: openssl rand -hex 32
+  auth_key: d129ecb4b2f2a6e8685193937dc4efbeab13be3eaf2c79a155ef74e5d272bf94
+
+# Remote connection settings (for TUI client)
+remote:
+  # Remote API server URL (leave empty for local-only mode)
+  # Example: https://noncondescendingly-anteroparietal-tyesha.ngrok-free.dev
+  url: ""
+
+  # Authentication key (must match api.auth_key on server)
+  auth_key: ""
+
 # Scheduling configuration
 schedule:
   # Time for daily morning brief (24-hour format)
@@ -92,6 +113,33 @@ planner:
 
   # Duration of focus blocks in hours
   focus_block_hours: 2
+
+# Strategic priorities for task scoring
+priorities:
+  # Objectives and Key Results (OKRs)
+  okrs:
+    - "Improve member retention by 15%"
+    - "Launch new product feature by Q2"
+    - "Reduce operational costs by 10%"
+
+  # Focus areas for strategic alignment
+  focus_areas:
+    - "Customer success"
+    - "Team development"
+    - "Product innovation"
+    - "Operational efficiency"
+
+  # Key stakeholders (email addresses)
+  key_stakeholders:
+    - "ceo@example.com"
+    - "board@example.com"
+    - "exec-team@example.com"
+
+  # Key projects for prioritization
+  key_projects:
+    - "Product launch"
+    - "Platform migration"
+    - "Team expansion"
 
 # Advanced settings (optional)
 advanced:
