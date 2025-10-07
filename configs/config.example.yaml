@@ -39,8 +39,8 @@ gemini:
   # Get yours at: https://aistudio.google.com/app/apikey
   api_key: YOUR_GEMINI_API_KEY_HERE
 
-  # Model to use (gemini-1.5-flash-latest is efficient and cost-effective)
-  model: gemini-1.5-flash-latest
+  # Model to use (gemini-2.5-flash is the latest and most efficient)
+  model: gemini-2.5-flash
 
   # Maximum tokens per response
   max_tokens: 2000
@@ -54,11 +54,10 @@ gemini:
   # Rate limiting per model (requests per minute)
   # These limits respect API quotas and prevent 429 errors
   rate_limits:
-    gemini-1.5-flash-latest: 15  # Free tier: 15 RPM
-    gemini-2.5-flash: 8          # Free tier: 10 RPM (use 8 for buffer)
-    gemini-1.5-pro: 2            # Free tier: 2 RPM
-    gemini-2.0-flash-exp: 15     # Preview tier: 15 RPM
-    gemini-1.5-flash: 8          # Legacy model (deprecated)
+    gemini-2.5-flash: 10         # Free tier: 10 RPM
+    gemini-2.5-pro: 2            # Free tier: 2 RPM
+    gemini-2.0-flash: 10         # Free tier: 10 RPM
+    gemini-2.0-flash-lite: 15    # Free tier: 15 RPM
 
   # Default rate limit for unknown models (requests per minute)
   default_rate_limit: 5
