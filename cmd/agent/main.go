@@ -79,7 +79,7 @@ func main() {
 	}
 
 	// Initialize LLM client
-	llmClient, err := llm.NewGeminiClient(cfg.Gemini.APIKey, database)
+	llmClient, err := llm.NewGeminiClient(cfg.Gemini.APIKey, database, cfg)
 	if err != nil {
 		log.Fatalf("Failed to initialize LLM client: %v", err)
 	}

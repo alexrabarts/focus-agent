@@ -51,6 +51,26 @@ gemini:
   # Cache duration in hours (reduces API calls)
   cache_hours: 24
 
+  # Rate limiting per model (requests per minute)
+  # These limits respect API quotas and prevent 429 errors
+  rate_limits:
+    gemini-2.5-flash: 8       # Free tier: 10 RPM (use 8 for buffer)
+    gemini-1.5-pro: 2         # Free tier: 2 RPM
+    gemini-2.0-flash-exp: 15  # Preview tier: 15 RPM
+    gemini-1.5-flash: 8       # Legacy model
+
+  # Default rate limit for unknown models (requests per minute)
+  default_rate_limit: 5
+
+  # Retry behavior on rate limit errors (429)
+  retry_on_rate_limit: true
+
+  # Maximum number of retries for failed requests
+  max_retries: 3
+
+  # Base delay in seconds before first retry (uses exponential backoff)
+  base_retry_delay_seconds: 60
+
 # Google Chat configuration for notifications
 chat:
   # Webhook URL for sending messages to Google Chat

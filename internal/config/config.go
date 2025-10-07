@@ -40,11 +40,16 @@ type Google struct {
 }
 
 type Gemini struct {
-	APIKey        string `yaml:"api_key"`
-	Model         string `yaml:"model"`
-	MaxTokens     int    `yaml:"max_tokens"`
-	Temperature   float32 `yaml:"temperature"`
-	CacheHours    int    `yaml:"cache_hours"`
+	APIKey           string         `yaml:"api_key"`
+	Model            string         `yaml:"model"`
+	MaxTokens        int            `yaml:"max_tokens"`
+	Temperature      float32        `yaml:"temperature"`
+	CacheHours       int            `yaml:"cache_hours"`
+	RateLimits       map[string]int `yaml:"rate_limits"`        // Requests per minute per model
+	DefaultRateLimit int            `yaml:"default_rate_limit"` // Fallback for unknown models
+	RetryOnRateLimit bool           `yaml:"retry_on_rate_limit"`
+	MaxRetries       int            `yaml:"max_retries"`
+	BaseRetryDelay   int            `yaml:"base_retry_delay_seconds"`
 }
 
 type Chat struct {
@@ -203,6 +208,27 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Gemini.CacheHours == 0 {
 		cfg.Gemini.CacheHours = 24
+	}
+	// Rate limit defaults
+	if cfg.Gemini.RateLimits == nil {
+		cfg.Gemini.RateLimits = map[string]int{
+			"gemini-2.5-flash":      8,  // Free tier: 10 RPM (use 8 for buffer)
+			"gemini-1.5-pro":        2,  // Free tier: 2 RPM
+			"gemini-2.0-flash-exp":  15, // Preview tier: 15 RPM
+			"gemini-1.5-flash":      8,  // Legacy model (same as 2.5)
+		}
+	}
+	if cfg.Gemini.DefaultRateLimit == 0 {
+		cfg.Gemini.DefaultRateLimit = 5
+	}
+	if !cfg.Gemini.RetryOnRateLimit {
+		cfg.Gemini.RetryOnRateLimit = true
+	}
+	if cfg.Gemini.MaxRetries == 0 {
+		cfg.Gemini.MaxRetries = 3
+	}
+	if cfg.Gemini.BaseRetryDelay == 0 {
+		cfg.Gemini.BaseRetryDelay = 60
 	}
 
 	// API defaults

@@ -529,3 +529,138 @@ func (db *DB) SaveDocument(doc *Document) error {
 	)
 	return err
 }
+
+// GetThreadsWithSummaries returns threads that have AI-generated summaries
+func (db *DB) GetThreadsWithSummaries(limit int) ([]*Thread, error) {
+	query := `
+		SELECT t.id, t.last_history_id, t.summary, t.summary_hash, t.task_count,
+		       t.next_followup_ts, t.last_synced, t.created_at, t.updated_at
+		FROM threads t
+		WHERE t.summary IS NOT NULL AND t.summary != ''
+		ORDER BY t.last_synced DESC
+		LIMIT ?
+	`
+
+	rows, err := db.Query(query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var threads []*Thread
+	for rows.Next() {
+		thread := &Thread{}
+		var nextFollowupTS, lastSyncedTS, createdTS, updatedTS sql.NullInt64
+
+		err := rows.Scan(
+			&thread.ID, &thread.LastHistoryID, &thread.Summary, &thread.SummaryHash,
+			&thread.TaskCount, &nextFollowupTS, &lastSyncedTS, &createdTS, &updatedTS,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if nextFollowupTS.Valid {
+			t := time.Unix(nextFollowupTS.Int64, 0)
+			thread.NextFollowupTS = &t
+		}
+		if lastSyncedTS.Valid {
+			thread.LastSynced = time.Unix(lastSyncedTS.Int64, 0)
+		}
+		if createdTS.Valid {
+			thread.CreatedAt = time.Unix(createdTS.Int64, 0)
+		}
+		if updatedTS.Valid {
+			thread.UpdatedAt = time.Unix(updatedTS.Int64, 0)
+		}
+
+		threads = append(threads, thread)
+	}
+
+	return threads, nil
+}
+
+// GetThreadByID returns a specific thread by ID
+func (db *DB) GetThreadByID(id string) (*Thread, error) {
+	thread := &Thread{}
+
+	query := `
+		SELECT id, last_history_id, summary, summary_hash, task_count,
+		       next_followup_ts, last_synced, created_at, updated_at
+		FROM threads
+		WHERE id = ?
+	`
+
+	var nextFollowupTS, lastSyncedTS, createdTS, updatedTS sql.NullInt64
+	err := db.QueryRow(query, id).Scan(
+		&thread.ID, &thread.LastHistoryID, &thread.Summary, &thread.SummaryHash,
+		&thread.TaskCount, &nextFollowupTS, &lastSyncedTS, &createdTS, &updatedTS,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("thread not found: %s", id)
+	} else if err != nil {
+		return nil, err
+	}
+
+	if nextFollowupTS.Valid {
+		t := time.Unix(nextFollowupTS.Int64, 0)
+		thread.NextFollowupTS = &t
+	}
+	if lastSyncedTS.Valid {
+		thread.LastSynced = time.Unix(lastSyncedTS.Int64, 0)
+	}
+	if createdTS.Valid {
+		thread.CreatedAt = time.Unix(createdTS.Int64, 0)
+	}
+	if updatedTS.Valid {
+		thread.UpdatedAt = time.Unix(updatedTS.Int64, 0)
+	}
+
+	return thread, nil
+}
+
+// GetThreadMessages returns all messages for a thread
+func (db *DB) GetThreadMessages(threadID string) ([]*Message, error) {
+	query := `
+		SELECT id, thread_id, from_addr, to_addr, subject, snippet, body, ts,
+		       last_msg_id, labels, sensitivity, created_at, updated_at
+		FROM messages
+		WHERE thread_id = ?
+		ORDER BY ts ASC
+	`
+
+	rows, err := db.Query(query, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []*Message
+	for rows.Next() {
+		msg := &Message{}
+		var ts, createdTS, updatedTS int64
+		var labelsJSON string
+
+		err := rows.Scan(
+			&msg.ID, &msg.ThreadID, &msg.From, &msg.To, &msg.Subject,
+			&msg.Snippet, &msg.Body, &ts, &msg.LastMsgID, &labelsJSON,
+			&msg.Sensitivity, &createdTS, &updatedTS,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		msg.Timestamp = time.Unix(ts, 0)
+		msg.CreatedAt = time.Unix(createdTS, 0)
+		msg.UpdatedAt = time.Unix(updatedTS, 0)
+
+		if labelsJSON != "" {
+			json.Unmarshal([]byte(labelsJSON), &msg.Labels)
+		}
+
+		messages = append(messages, msg)
+	}
+
+	return messages, nil
+}

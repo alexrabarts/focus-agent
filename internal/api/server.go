@@ -44,6 +44,8 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/priorities", s.authMiddleware(s.handlePriorities))
 	mux.HandleFunc("/api/priorities/undo", s.authMiddleware(s.handlePrioritiesUndo))
 	mux.HandleFunc("/api/stats", s.authMiddleware(s.handleStats))
+	mux.HandleFunc("/api/threads", s.authMiddleware(s.handleThreads))
+	mux.HandleFunc("/api/threads/", s.authMiddleware(s.handleThreadMessages))
 	mux.HandleFunc("/health", s.handleHealth)
 
 	s.server = &http.Server{

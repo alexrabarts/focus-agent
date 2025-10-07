@@ -71,6 +71,31 @@ type StatsResponse struct {
 	LastTasksSync     *string `json:"last_tasks_sync,omitempty"`
 }
 
+// ThreadResponse matches the API response structure
+type ThreadResponse struct {
+	ID             string  `json:"id"`
+	LastHistoryID  string  `json:"last_history_id"`
+	Summary        string  `json:"summary"`
+	SummaryHash    string  `json:"summary_hash"`
+	TaskCount      int     `json:"task_count"`
+	NextFollowupTS *string `json:"next_followup_ts,omitempty"`
+	LastSynced     string  `json:"last_synced"`
+}
+
+// MessageResponse matches the API response structure
+type MessageResponse struct {
+	ID          string   `json:"id"`
+	ThreadID    string   `json:"thread_id"`
+	From        string   `json:"from"`
+	To          string   `json:"to"`
+	Subject     string   `json:"subject"`
+	Snippet     string   `json:"snippet"`
+	Body        string   `json:"body"`
+	Timestamp   string   `json:"timestamp"`
+	Labels      []string `json:"labels"`
+	Sensitivity string   `json:"sensitivity"`
+}
+
 // Helper to make authenticated requests
 func (c *APIClient) doRequest(method, path string, body interface{}) (*http.Response, error) {
 	var reqBody *bytes.Buffer
@@ -258,4 +283,80 @@ func (c *APIClient) GetStats() (Stats, error) {
 	}
 
 	return stats, nil
+}
+
+// GetThreads fetches threads with summaries from the remote API
+func (c *APIClient) GetThreads() ([]*db.Thread, error) {
+	resp, err := c.doRequest("GET", "/api/threads", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var threads []ThreadResponse
+	if err := json.NewDecoder(resp.Body).Decode(&threads); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Convert to db.Thread
+	result := make([]*db.Thread, 0, len(threads))
+	for _, t := range threads {
+		var nextFollowupTS *time.Time
+		if t.NextFollowupTS != nil {
+			parsed, err := time.Parse(time.RFC3339, *t.NextFollowupTS)
+			if err == nil {
+				nextFollowupTS = &parsed
+			}
+		}
+
+		lastSynced, _ := time.Parse(time.RFC3339, t.LastSynced)
+
+		result = append(result, &db.Thread{
+			ID:             t.ID,
+			LastHistoryID:  t.LastHistoryID,
+			Summary:        t.Summary,
+			SummaryHash:    t.SummaryHash,
+			TaskCount:      t.TaskCount,
+			NextFollowupTS: nextFollowupTS,
+			LastSynced:     lastSynced,
+		})
+	}
+
+	return result, nil
+}
+
+// GetThreadMessages fetches messages for a thread from the remote API
+func (c *APIClient) GetThreadMessages(threadID string) ([]*db.Message, error) {
+	path := fmt.Sprintf("/api/threads/%s/messages", threadID)
+	resp, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var messages []MessageResponse
+	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Convert to db.Message
+	result := make([]*db.Message, 0, len(messages))
+	for _, m := range messages {
+		timestamp, _ := time.Parse(time.RFC3339, m.Timestamp)
+
+		result = append(result, &db.Message{
+			ID:          m.ID,
+			ThreadID:    m.ThreadID,
+			From:        m.From,
+			To:          m.To,
+			Subject:     m.Subject,
+			Snippet:     m.Snippet,
+			Body:        m.Body,
+			Timestamp:   timestamp,
+			Labels:      m.Labels,
+			Sensitivity: m.Sensitivity,
+		})
+	}
+
+	return result, nil
 }

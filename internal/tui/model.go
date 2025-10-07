@@ -18,6 +18,7 @@ const (
 	tasksView view = iota
 	prioritiesView
 	statsView
+	threadsView
 )
 
 type Model struct {
@@ -37,6 +38,7 @@ type Model struct {
 	tasksModel      TasksModel
 	prioritiesModel PrioritiesModel
 	statsModel      StatsModel
+	threadsModel    ThreadsModel
 }
 
 func NewModel(database *db.DB, clients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config) Model {
@@ -57,6 +59,7 @@ func NewModel(database *db.DB, clients *google.Clients, llmClient *llm.GeminiCli
 		tasksModel:      NewTasksModel(database, plannerService, apiClient),
 		prioritiesModel: NewPrioritiesModel(cfg, apiClient),
 		statsModel:      NewStatsModel(database, apiClient),
+		threadsModel:    NewThreadsModel(database, apiClient),
 	}
 }
 
@@ -64,6 +67,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.tasksModel.fetchTasks(),
 		m.statsModel.fetchStats(),
+		m.threadsModel.fetchThreads(),
 	)
 }
 
@@ -89,13 +93,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.currentView > 0 {
 					m.currentView--
 				} else {
-					m.currentView = statsView
+					m.currentView = threadsView
 				}
 				return m, m.refreshCurrentView()
 
 			case "right", "l":
 				// Move to next tab
-				if m.currentView < statsView {
+				if m.currentView < threadsView {
 					m.currentView++
 				} else {
 					m.currentView = tasksView
@@ -119,6 +123,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prioritiesModel, cmd = m.prioritiesModel.Update(msg)
 	case statsView:
 		m.statsModel, cmd = m.statsModel.Update(msg)
+	case threadsView:
+		m.threadsModel, cmd = m.threadsModel.Update(msg)
 	}
 
 	return m, cmd
@@ -130,6 +136,8 @@ func (m Model) refreshCurrentView() tea.Cmd {
 		return m.tasksModel.fetchTasks()
 	case statsView:
 		return m.statsModel.fetchStats()
+	case threadsView:
+		return m.threadsModel.fetchThreads()
 	default:
 		return nil
 	}
@@ -152,6 +160,8 @@ func (m Model) View() string {
 		content = m.prioritiesModel.View()
 	case statsView:
 		content = m.statsModel.View()
+	case threadsView:
+		content = m.threadsModel.View()
 	}
 
 	// Footer
@@ -178,7 +188,7 @@ func (m Model) renderHeader() string {
 	title := titleStyle.Render("Focus Agent")
 
 	tabs := ""
-	for i, label := range []string{"Tasks", "Priorities", "Stats"} {
+	for i, label := range []string{"Tasks", "Priorities", "Stats", "Threads"} {
 		if view(i) == m.currentView {
 			tabs += activeTabStyle.Render(label)
 		} else {

@@ -414,13 +414,14 @@ func (s *Scheduler) ProcessNewMessages() {
 		log.Printf("Processed thread %s: summary generated, %d tasks extracted", threadID, len(tasks))
 		successCount++
 
-		// Show progress every 50 threads
-		if (i+1)%50 == 0 {
+		// Show progress every 10 threads
+		if (i+1)%10 == 0 {
 			elapsed := time.Since(startTime)
 			remaining := len(threadIDs) - (i + 1)
 			estimatedTimeLeft := time.Duration(float64(elapsed) / float64(i+1) * float64(remaining))
-			log.Printf("Progress: %d/%d threads | Elapsed: %v | Est. remaining: %v",
-				i+1, len(threadIDs), elapsed.Round(time.Second), estimatedTimeLeft.Round(time.Second))
+			avgTimePerThread := elapsed / time.Duration(i+1)
+			log.Printf("Progress: %d/%d threads | Elapsed: %v | Avg: %v/thread | Est. remaining: %v",
+				i+1, len(threadIDs), elapsed.Round(time.Second), avgTimePerThread.Round(time.Second), estimatedTimeLeft.Round(time.Second))
 		}
 	}
 

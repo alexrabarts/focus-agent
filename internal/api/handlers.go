@@ -50,6 +50,31 @@ type StatsResponse struct {
 	LastTasksSync     *string `json:"last_tasks_sync,omitempty"`
 }
 
+// Thread response structure
+type ThreadResponse struct {
+	ID             string  `json:"id"`
+	LastHistoryID  string  `json:"last_history_id"`
+	Summary        string  `json:"summary"`
+	SummaryHash    string  `json:"summary_hash"`
+	TaskCount      int     `json:"task_count"`
+	NextFollowupTS *string `json:"next_followup_ts,omitempty"`
+	LastSynced     string  `json:"last_synced"`
+}
+
+// Message response structure
+type MessageResponse struct {
+	ID          string   `json:"id"`
+	ThreadID    string   `json:"thread_id"`
+	From        string   `json:"from"`
+	To          string   `json:"to"`
+	Subject     string   `json:"subject"`
+	Snippet     string   `json:"snippet"`
+	Body        string   `json:"body"`
+	Timestamp   string   `json:"timestamp"`
+	Labels      []string `json:"labels"`
+	Sensitivity string   `json:"sensitivity"`
+}
+
 // GET /api/tasks - List pending tasks
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -225,4 +250,87 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, stats)
+}
+
+// GET /api/threads - List threads with summaries
+func (s *Server) handleThreads(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	threads, err := s.database.GetThreadsWithSummaries(50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Convert to response format
+	response := make([]ThreadResponse, 0, len(threads))
+	for _, thread := range threads {
+		var nextFollowupTS *string
+		if thread.NextFollowupTS != nil {
+			formatted := thread.NextFollowupTS.Format(time.RFC3339)
+			nextFollowupTS = &formatted
+		}
+
+		response = append(response, ThreadResponse{
+			ID:             thread.ID,
+			LastHistoryID:  thread.LastHistoryID,
+			Summary:        thread.Summary,
+			SummaryHash:    thread.SummaryHash,
+			TaskCount:      thread.TaskCount,
+			NextFollowupTS: nextFollowupTS,
+			LastSynced:     thread.LastSynced.Format(time.RFC3339),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, response)
+}
+
+// GET /api/threads/:id/messages - Get messages for a thread
+func (s *Server) handleThreadMessages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// Extract thread ID from path: /api/threads/:id/messages
+	path := strings.TrimPrefix(r.URL.Path, "/api/threads/")
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 || parts[1] != "messages" {
+		writeError(w, http.StatusBadRequest, "Invalid path - expected /api/threads/:id/messages")
+		return
+	}
+
+	threadID := parts[0]
+	if threadID == "" {
+		writeError(w, http.StatusBadRequest, "Invalid thread ID")
+		return
+	}
+
+	messages, err := s.database.GetThreadMessages(threadID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Convert to response format
+	response := make([]MessageResponse, 0, len(messages))
+	for _, msg := range messages {
+		response = append(response, MessageResponse{
+			ID:          msg.ID,
+			ThreadID:    msg.ThreadID,
+			From:        msg.From,
+			To:          msg.To,
+			Subject:     msg.Subject,
+			Snippet:     msg.Snippet,
+			Body:        msg.Body,
+			Timestamp:   msg.Timestamp.Format(time.RFC3339),
+			Labels:      msg.Labels,
+			Sensitivity: msg.Sensitivity,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, response)
 }

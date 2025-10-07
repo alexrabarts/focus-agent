@@ -9,21 +9,26 @@ import (
 	"time"
 
 	"github.com/google/generative-ai-go/genai"
+	"golang.org/x/time/rate"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 
+	"github.com/alexrabarts/focus-agent/internal/config"
 	"github.com/alexrabarts/focus-agent/internal/db"
 )
 
 // GeminiClient handles Gemini API operations
 type GeminiClient struct {
-	client   *genai.Client
-	model    *genai.GenerativeModel
-	db       *db.DB
-	cacheTTL time.Duration
+	client      *genai.Client
+	model       *genai.GenerativeModel
+	db          *db.DB
+	config      *config.Config
+	rateLimiter *rate.Limiter
+	cacheTTL    time.Duration
 }
 
 // NewGeminiClient creates a new Gemini client
-func NewGeminiClient(apiKey string, database *db.DB) (*GeminiClient, error) {
+func NewGeminiClient(apiKey string, database *db.DB, cfg *config.Config) (*GeminiClient, error) {
 	ctx := context.Background()
 
 	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
@@ -31,14 +36,22 @@ func NewGeminiClient(apiKey string, database *db.DB) (*GeminiClient, error) {
 		return nil, fmt.Errorf("failed to create Gemini client: %w", err)
 	}
 
-	// Use Gemini 2.5 Flash for efficiency (1.5 models retired)
-	model := client.GenerativeModel("gemini-2.5-flash")
+	// Use configured model (defaults to gemini-2.5-flash)
+	modelName := cfg.Gemini.Model
+	if modelName == "" {
+		modelName = "gemini-2.5-flash"
+	}
+	model := client.GenerativeModel(modelName)
 
-	// Configure model parameters
-	model.SetTemperature(0.3)
+	// Configure model parameters from config
+	if cfg.Gemini.Temperature > 0 {
+		model.SetTemperature(cfg.Gemini.Temperature)
+	}
 	model.SetTopK(40)
 	model.SetTopP(0.95)
-	model.SetMaxOutputTokens(2000)
+	if cfg.Gemini.MaxTokens > 0 {
+		model.SetMaxOutputTokens(int32(cfg.Gemini.MaxTokens))
+	}
 
 	// Safety settings - allow most content for productivity use
 	model.SafetySettings = []*genai.SafetySetting{
@@ -56,12 +69,33 @@ func NewGeminiClient(apiKey string, database *db.DB) (*GeminiClient, error) {
 		},
 	}
 
+	// Create rate limiter based on model
+	rateLimit := getRateLimit(cfg, modelName)
+	limiter := rate.NewLimiter(rate.Every(time.Minute/time.Duration(rateLimit)), 1)
+
+	log.Printf("Initialized Gemini client with model %s (rate limit: %d RPM)", modelName, rateLimit)
+
+	cacheTTL := time.Duration(cfg.Gemini.CacheHours) * time.Hour
+	if cacheTTL == 0 {
+		cacheTTL = 24 * time.Hour
+	}
+
 	return &GeminiClient{
-		client:   client,
-		model:    model,
-		db:       database,
-		cacheTTL: 24 * time.Hour, // Default 24 hour cache
+		client:      client,
+		model:       model,
+		db:          database,
+		config:      cfg,
+		rateLimiter: limiter,
+		cacheTTL:    cacheTTL,
 	}, nil
+}
+
+// getRateLimit returns the rate limit for a given model
+func getRateLimit(cfg *config.Config, model string) int {
+	if limit, ok := cfg.Gemini.RateLimits[model]; ok {
+		return limit
+	}
+	return cfg.Gemini.DefaultRateLimit
 }
 
 // Close closes the Gemini client
@@ -70,6 +104,46 @@ func (g *GeminiClient) Close() error {
 		return g.client.Close()
 	}
 	return nil
+}
+
+// generateWithRetry wraps GenerateContent with exponential backoff retry logic
+func (g *GeminiClient) generateWithRetry(ctx context.Context, prompt genai.Text) (*genai.GenerateContentResponse, error) {
+	var lastErr error
+
+	for attempt := 0; attempt <= g.config.Gemini.MaxRetries; attempt++ {
+		resp, err := g.model.GenerateContent(ctx, prompt)
+		if err == nil {
+			return resp, nil
+		}
+
+		// Check if it's a rate limit error (429)
+		if apiErr, ok := err.(*googleapi.Error); ok && apiErr.Code == 429 {
+			if !g.config.Gemini.RetryOnRateLimit || attempt >= g.config.Gemini.MaxRetries {
+				return nil, err
+			}
+
+			// Calculate exponential backoff delay
+			backoffDelay := time.Duration(g.config.Gemini.BaseRetryDelay) * time.Second * (1 << uint(attempt))
+
+			log.Printf("Rate limit hit (429), retrying in %v (attempt %d/%d)", backoffDelay, attempt+1, g.config.Gemini.MaxRetries)
+
+			// Wait with backoff
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoffDelay):
+				// Continue to next attempt
+			}
+
+			lastErr = err
+			continue
+		}
+
+		// For non-rate-limit errors, fail immediately
+		return nil, err
+	}
+
+	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
 }
 
 // SummarizeThread summarizes an email thread
@@ -85,9 +159,14 @@ func (g *GeminiClient) SummarizeThread(ctx context.Context, messages []*db.Messa
 		return cached.Response, nil
 	}
 
-	// Generate summary
+	// Wait for rate limit
+	if err := g.rateLimiter.Wait(ctx); err != nil {
+		return "", fmt.Errorf("rate limiter error: %w", err)
+	}
+
+	// Generate summary with retry
 	startTime := time.Now()
-	resp, err := g.model.GenerateContent(ctx, genai.Text(prompt))
+	resp, err := g.generateWithRetry(ctx, genai.Text(prompt))
 	if err != nil {
 		g.db.LogUsage("gemini", "summarize_thread", 0, 0, time.Since(startTime), err)
 		return "", fmt.Errorf("failed to generate summary: %w", err)
@@ -129,9 +208,14 @@ func (g *GeminiClient) ExtractTasks(ctx context.Context, content string) ([]*db.
 		return g.parseTasksFromResponse(cached.Response), nil
 	}
 
-	// Generate response
+	// Wait for rate limit
+	if err := g.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter error: %w", err)
+	}
+
+	// Generate response with retry
 	startTime := time.Now()
-	resp, err := g.model.GenerateContent(ctx, genai.Text(prompt))
+	resp, err := g.generateWithRetry(ctx, genai.Text(prompt))
 	if err != nil {
 		g.db.LogUsage("gemini", "extract_tasks", 0, 0, time.Since(startTime), err)
 		return nil, fmt.Errorf("failed to extract tasks: %w", err)
@@ -171,9 +255,14 @@ func (g *GeminiClient) DraftReply(ctx context.Context, thread []*db.Message, goa
 		return cached.Response, nil
 	}
 
-	// Generate reply
+	// Wait for rate limit
+	if err := g.rateLimiter.Wait(ctx); err != nil {
+		return "", fmt.Errorf("rate limiter error: %w", err)
+	}
+
+	// Generate reply with retry
 	startTime := time.Now()
-	resp, err := g.model.GenerateContent(ctx, genai.Text(prompt))
+	resp, err := g.generateWithRetry(ctx, genai.Text(prompt))
 	if err != nil {
 		g.db.LogUsage("gemini", "draft_reply", 0, 0, time.Since(startTime), err)
 		return "", fmt.Errorf("failed to draft reply: %w", err)
@@ -213,9 +302,14 @@ func (g *GeminiClient) GenerateMeetingPrep(ctx context.Context, event *db.Event,
 		return cached.Response, nil
 	}
 
-	// Generate prep
+	// Wait for rate limit
+	if err := g.rateLimiter.Wait(ctx); err != nil {
+		return "", fmt.Errorf("rate limiter error: %w", err)
+	}
+
+	// Generate prep with retry
 	startTime := time.Now()
-	resp, err := g.model.GenerateContent(ctx, genai.Text(prompt))
+	resp, err := g.generateWithRetry(ctx, genai.Text(prompt))
 	if err != nil {
 		g.db.LogUsage("gemini", "meeting_prep", 0, 0, time.Since(startTime), err)
 		return "", fmt.Errorf("failed to generate meeting prep: %w", err)
