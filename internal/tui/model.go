@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -59,9 +61,10 @@ type Model struct {
 
 	// State
 	lastRefreshTime time.Time
+	logBuffer       *LogBuffer
 }
 
-func NewModel(database *db.DB, clients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config) Model {
+func NewModel(database *db.DB, clients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config, logBuffer *LogBuffer) Model {
 	// Initialize API client if remote mode is configured
 	var apiClient *APIClient
 	var sched *scheduler.Scheduler
@@ -87,6 +90,7 @@ func NewModel(database *db.DB, clients *google.Clients, llmClient *llm.GeminiCli
 		statsModel:      NewStatsModel(database, apiClient),
 		threadsModel:    NewThreadsModel(database, apiClient),
 		lastRefreshTime: time.Now(),
+		logBuffer:       logBuffer,
 	}
 }
 
@@ -105,6 +109,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+		// Calculate content area height (total - header - footer - margins)
+		headerHeight := 3
+		footerHeight := 2
+		contentHeight := m.height - headerHeight - footerHeight - 4
+		if contentHeight < 10 {
+			contentHeight = 10 // Minimum height
+		}
+
+		// Update all sub-model viewports
+		m.tasksModel.SetSize(m.width-4, contentHeight)
+		m.threadsModel.SetSize(m.width-4, contentHeight)
+		m.queueModel.SetSize(m.width-4, contentHeight)
+		m.prioritiesModel.SetSize(m.width-4, contentHeight)
+		m.statsModel.SetSize(m.width-4, contentHeight)
+
 		return m, nil
 
 	case tickMsg:
@@ -164,7 +184,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch m.currentView {
 	case tasksView:
-		m.tasksModel, cmd = m.tasksModel.Update(msg)
+		tasksModelPtr, tasksCmd := m.tasksModel.Update(msg)
+		m.tasksModel = *tasksModelPtr
+		cmd = tasksCmd
 	case prioritiesView:
 		m.prioritiesModel, cmd = m.prioritiesModel.Update(msg)
 	case queueView:
@@ -261,6 +283,10 @@ func (m Model) renderFooter() string {
 		Foreground(lipgloss.Color("241")).
 		Padding(0, 1)
 
+	logStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Padding(0, 1)
+
 	footer := "q: quit | ←/→: switch tabs | ↑/↓: navigate | enter: select"
 
 	// Add status information
@@ -274,7 +300,25 @@ func (m Model) renderFooter() string {
 		footer += fmt.Sprintf(" | %s", m.formatLastRefresh())
 	}
 
-	return helpStyle.Render(footer)
+	footerText := helpStyle.Render(footer)
+
+	// Add recent log message if available
+	if m.logBuffer != nil {
+		if latest := m.logBuffer.GetLatest(); latest != nil {
+			// Show log message if it's recent (within last 10 seconds)
+			if time.Since(latest.Timestamp) < 10*time.Second {
+				// Truncate long messages
+				msg := latest.Message
+				if len(msg) > 100 {
+					msg = msg[:97] + "..."
+				}
+				logLine := logStyle.Render(fmt.Sprintf("⚙️  %s", msg))
+				footerText = footerText + "\n" + logLine
+			}
+		}
+	}
+
+	return footerText
 }
 
 // formatLastRefresh returns a human-readable string for when data was last refreshed
@@ -302,7 +346,26 @@ func (m Model) formatLastRefresh() string {
 }
 
 func Start(database *db.DB, clients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config) error {
-	m := NewModel(database, clients, llmClient, plannerService, cfg)
+	// Create log buffer to capture background logs
+	logBuffer := NewLogBuffer(10) // Keep last 10 log messages
+
+	// Redirect log output to buffer
+	originalOutput := log.Writer()
+	log.SetOutput(logBuffer)
+	defer log.SetOutput(originalOutput)
+
+	// Also redirect stderr to dev/null to prevent any direct stderr writes from disrupting TUI
+	originalStderr := os.Stderr
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err == nil {
+		os.Stderr = devNull
+		defer func() {
+			os.Stderr = originalStderr
+			devNull.Close()
+		}()
+	}
+
+	m := NewModel(database, clients, llmClient, plannerService, cfg, logBuffer)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
