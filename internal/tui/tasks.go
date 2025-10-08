@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/alexrabarts/focus-agent/internal/db"
@@ -22,6 +23,9 @@ type TasksModel struct {
 	lastCompletedTaskID string
 	selectedTask        *db.Task // Currently selected task for detail view
 	detailScroll        int      // Scroll position in detail view
+	maxScroll           int      // Maximum scroll position for current task
+	viewport            viewport.Model
+	ready               bool
 }
 
 type tasksLoadedMsg struct {
@@ -35,7 +39,15 @@ func NewTasksModel(database *db.DB, planner *planner.Planner, apiClient *APIClie
 		planner:   planner,
 		apiClient: apiClient,
 		loading:   true,
+		viewport:  viewport.New(80, 20), // Default size, will be updated
 	}
+}
+
+// SetSize updates the viewport dimensions
+func (m *TasksModel) SetSize(width, height int) {
+	m.viewport.Width = width
+	m.viewport.Height = height
+	m.ready = true
 }
 
 func (m TasksModel) fetchTasks() tea.Cmd {
@@ -55,7 +67,11 @@ func (m TasksModel) fetchTasks() tea.Cmd {
 	}
 }
 
-func (m TasksModel) Update(msg tea.Msg) (TasksModel, tea.Cmd) {
+func (m *TasksModel) Update(msg tea.Msg) (*TasksModel, tea.Cmd) {
+	// Update viewport
+	var vpCmd tea.Cmd
+	m.viewport, vpCmd = m.viewport.Update(msg)
+
 	switch msg := msg.(type) {
 	case tasksLoadedMsg:
 		m.loading = false
@@ -73,11 +89,25 @@ func (m TasksModel) Update(msg tea.Msg) (TasksModel, tea.Cmd) {
 				m.detailScroll = 0
 				return m, nil
 			case "up", "k":
+				// Scroll up first, then navigate to previous task
 				if m.detailScroll > 0 {
 					m.detailScroll--
+				} else if m.cursor > 0 {
+					// At top of content, go to previous task
+					m.cursor--
+					m.selectedTask = m.tasks[m.cursor]
+					m.detailScroll = 0
 				}
 			case "down", "j":
-				m.detailScroll++
+				// Scroll down first, then navigate to next task
+				if m.detailScroll < m.maxScroll {
+					m.detailScroll++
+				} else if m.cursor < len(m.tasks)-1 {
+					// At bottom of content, go to next task
+					m.cursor++
+					m.selectedTask = m.tasks[m.cursor]
+					m.detailScroll = 0
+				}
 			case "c":
 				// Complete task from detail view
 				task := m.selectedTask
@@ -126,7 +156,7 @@ func (m TasksModel) Update(msg tea.Msg) (TasksModel, tea.Cmd) {
 		}
 	}
 
-	return m, nil
+	return m, vpCmd
 }
 
 func (m TasksModel) completeTask(task *db.Task) tea.Cmd {
@@ -187,7 +217,11 @@ func (m TasksModel) uncompleteTask(taskID string) tea.Cmd {
 	}
 }
 
-func (m TasksModel) View() string {
+func (m *TasksModel) View() string {
+	if !m.ready {
+		return "Initializing..."
+	}
+
 	if m.loading {
 		return "Loading tasks..."
 	}
@@ -201,7 +235,9 @@ func (m TasksModel) View() string {
 
 	// If in detail view, show task detail
 	if m.selectedTask != nil {
-		return m.renderTaskDetail()
+		content := m.renderTaskDetail()
+		m.viewport.SetContent(content)
+		return m.viewport.View()
 	}
 
 	if len(m.tasks) == 0 {
@@ -286,7 +322,10 @@ func (m TasksModel) View() string {
 	}
 	b.WriteString(helpStyle.Render(helpText))
 
-	return b.String()
+	// Set viewport content and return viewport view
+	content := b.String()
+	m.viewport.SetContent(content)
+	return m.viewport.View()
 }
 
 func (m TasksModel) renderTask(task *db.Task, selected bool) string {
@@ -324,15 +363,16 @@ func (m TasksModel) renderTask(task *db.Task, selected bool) string {
 	return taskStyle.Render(taskText) + "\n"
 }
 
-func (m TasksModel) renderTaskDetail() string {
+func (m *TasksModel) renderTaskDetail() string {
 	var b strings.Builder
 	task := m.selectedTask
 
-	// Header with task title
+	// Header with task title (wrapped)
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("39")).
-		Padding(0, 1)
+		Padding(0, 1).
+		Width(90)
 
 	b.WriteString(headerStyle.Render(fmt.Sprintf("✅ %s", task.Title)) + "\n\n")
 
@@ -381,7 +421,11 @@ func (m TasksModel) renderTaskDetail() string {
 	if task.Description != "" {
 		b.WriteString("\n")
 		b.WriteString(infoTitleStyle.Render("📝 Description:") + "\n")
-		b.WriteString(infoStyle.Render(task.Description) + "\n")
+		descStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252")).
+			Width(90).  // Set max width for wrapping
+			Padding(0, 2)
+		b.WriteString(descStyle.Render(task.Description) + "\n")
 	}
 
 	// Score Breakdown section
@@ -469,11 +513,12 @@ func (m TasksModel) renderTaskDetail() string {
 		} else {
 			thread, _ = m.database.GetThreadByID(task.SourceID)
 			if thread != nil && thread.Summary != "" {
-				summary := thread.Summary
-				if len(summary) > 200 {
-					summary = summary[:197] + "..."
-				}
-				b.WriteString(contextStyle.Render(fmt.Sprintf("Thread summary: %s", summary)) + "\n")
+				// Render full summary with word wrapping
+				summaryStyle := lipgloss.NewStyle().
+					Foreground(lipgloss.Color("250")).
+					Width(90).  // Set max width for wrapping
+					Padding(0, 2)
+				b.WriteString(summaryStyle.Render(thread.Summary) + "\n")
 			}
 		}
 	}
@@ -484,7 +529,21 @@ func (m TasksModel) renderTaskDetail() string {
 		Foreground(lipgloss.Color("241")).
 		Padding(1, 0, 0, 1)
 
-	b.WriteString(helpStyle.Render("c: complete task | esc/q: back to list | ↑/↓: scroll"))
+	// Calculate max scroll for smart navigation
+	fullContent := b.String()
+	totalLines := strings.Count(fullContent, "\n")
+	viewportHeight := 20 // Assume 20 lines visible
+	m.maxScroll = totalLines - viewportHeight
+	if m.maxScroll < 0 {
+		m.maxScroll = 0
+	}
+
+	// Simple help text - let terminal handle scrolling naturally
+	helpText := "↑/↓: prev/next task | c: complete | esc/q: back to list"
+	if m.maxScroll > 5 {
+		helpText = "↑/↓: scroll then navigate | c: complete | esc/q: back"
+	}
+	b.WriteString(helpStyle.Render(helpText))
 
 	return b.String()
 }
