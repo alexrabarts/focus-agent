@@ -411,12 +411,10 @@ func (m *TasksModel) renderTaskDetail() string {
 		}
 
 		if linkURL != "" {
-			linkStyle := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("39")).
-				Underline(true).
-				Padding(0, 2)
+			// Output hyperlink directly without lipgloss styling to avoid corrupting OSC 8 sequences
 			hyperlink := makeHyperlink(linkURL, linkText)
-			b.WriteString(linkStyle.Render(hyperlink) + "\n")
+			// Apply color and underline via ANSI codes directly
+			b.WriteString(fmt.Sprintf("  \x1b[38;5;39m\x1b[4m%s\x1b[0m\n", hyperlink))
 		}
 	}
 

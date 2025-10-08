@@ -325,11 +325,10 @@ func (m ThreadsModel) renderThreadDetail() string {
 
 	// Add clickable Gmail link
 	gmailURL := fmt.Sprintf("https://mail.google.com/mail/u/0/#inbox/%s", m.selectedThread.ID)
-	linkStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("39")).
-		Underline(true)
-	linkText := makeHyperlink(gmailURL, "🔗 View in Gmail")
-	b.WriteString("  " + linkStyle.Render(linkText) + "\n\n")
+	// Output hyperlink directly without lipgloss styling to avoid corrupting OSC 8 sequences
+	hyperlink := makeHyperlink(gmailURL, "🔗 View in Gmail")
+	// Apply color and underline via ANSI codes directly
+	b.WriteString(fmt.Sprintf("  \x1b[38;5;39m\x1b[4m%s\x1b[0m\n\n", hyperlink))
 
 	// AI Summary section
 	summaryTitleStyle := lipgloss.NewStyle().
