@@ -368,6 +368,8 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 
 	// Save extracted tasks
 	for _, task := range tasks {
+		// Set source to gmail for email-extracted tasks
+		task.Source = "gmail"
 		// Set source_id to thread ID so we can link tasks to threads
 		task.SourceID = threadID
 		if err := s.db.SaveTask(task); err != nil {
@@ -553,6 +555,8 @@ func (s *Scheduler) ProcessNewMessages() {
 
 		// Save extracted tasks
 		for _, task := range tasks {
+			// Set source to gmail for email-extracted tasks
+			task.Source = "gmail"
 			// Set source_id to thread ID so we can link tasks to threads
 			task.SourceID = threadID
 			if err := s.db.SaveTask(task); err != nil {
@@ -675,6 +679,8 @@ func (s *Scheduler) ReprocessAITasks() error {
 
 		// Save extracted tasks
 		for _, task := range tasks {
+			// Set source to gmail for email-extracted tasks
+			task.Source = "gmail"
 			task.SourceID = thread.ID
 			if err := s.db.SaveTask(task); err != nil {
 				log.Printf("Failed to save task: %v", err)
