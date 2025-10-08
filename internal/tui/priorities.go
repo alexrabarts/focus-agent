@@ -3,9 +3,11 @@ package tui
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
@@ -44,6 +46,8 @@ type PrioritiesModel struct {
 	editingIndex       int
 	previousPriorities *config.Priorities
 	message            string
+	viewport viewport.Model
+	ready bool
 }
 
 func NewPrioritiesModel(cfg *config.Config, plannerService *planner.Planner, apiClient *APIClient) PrioritiesModel {
@@ -61,7 +65,15 @@ func NewPrioritiesModel(cfg *config.Config, plannerService *planner.Planner, api
 		mode:               normalMode,
 		textInput:          ti,
 		previousPriorities: nil,
+		viewport:           viewport.New(80, 20),
 	}
+}
+
+// SetSize updates the viewport dimensions
+func (m *PrioritiesModel) SetSize(width, height int) {
+	m.viewport.Width = width
+	m.viewport.Height = height
+	m.ready = true
 }
 
 func (m PrioritiesModel) IsInInputMode() bool {
@@ -70,6 +82,8 @@ func (m PrioritiesModel) IsInInputMode() bool {
 
 func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 	var cmd tea.Cmd
+	var vpCmd tea.Cmd
+	m.viewport, vpCmd = m.viewport.Update(msg)
 
 	// Handle adding mode
 	if m.mode == addingMode {
@@ -85,7 +99,7 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 					if err := m.saveConfig(); err != nil {
 						m.message = fmt.Sprintf("Error saving: %v", err)
 					} else {
-						m.message = "Priority added"
+						m.message = "Priority added (recalculating in background...)"
 					}
 				}
 				m.mode = normalMode
@@ -121,7 +135,7 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 					if err := m.saveConfig(); err != nil {
 						m.message = fmt.Sprintf("Error saving: %v", err)
 					} else {
-						m.message = "Priority updated"
+						m.message = "Priority updated (recalculating in background...)"
 					}
 				}
 				m.mode = normalMode
@@ -275,7 +289,7 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 				if err := m.saveConfig(); err != nil {
 					m.message = fmt.Sprintf("Error saving: %v", err)
 				} else {
-					m.message = "Priority deleted"
+					m.message = "Priority deleted (recalculating in background...)"
 				}
 				// Adjust cursor if needed
 				maxCursor := m.getSectionLength(m.currentSection) - 1
@@ -291,14 +305,14 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 				if err := m.saveConfig(); err != nil {
 					m.message = fmt.Sprintf("Error undoing: %v", err)
 				} else {
-					m.message = "Undone"
+					m.message = "Undone (recalculating in background...)"
 					m.previousPriorities = nil
 				}
 			}
 		}
 	}
 
-	return m, nil
+	return m, vpCmd
 }
 
 func (m *PrioritiesModel) saveStateForUndo() {
@@ -516,26 +530,35 @@ func (m PrioritiesModel) saveConfig() error {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
 
-	// Trigger rescore of tasks with new priorities (instant, no tokens)
+	// Trigger rescore of tasks with new priorities asynchronously
+	// This can take several minutes due to LLM API calls, so don't block the UI
 	if m.planner != nil {
-		ctx := context.Background()
-		if err := m.planner.PrioritizeTasks(ctx); err != nil {
-			// Log error but don't fail the save
-			// The rescore will happen on next scheduled run
-			return fmt.Errorf("config saved but rescore failed: %w", err)
-		}
+		go func() {
+			ctx := context.Background()
+			log.Println("Background: Recalculating task priorities with updated strategic priorities...")
+			if err := m.planner.PrioritizeTasks(ctx); err != nil {
+				log.Printf("Background priority recalculation failed: %v", err)
+				return
+			}
+			log.Println("Background: Task priorities recalculated successfully")
 
-		// Recalculate thread priorities based on updated task scores
-		if err := m.planner.RecalculateThreadPriorities(ctx); err != nil {
-			// Log error but don't fail the save
-			return fmt.Errorf("config saved but thread priority recalculation failed: %w", err)
-		}
+			// Recalculate thread priorities based on updated task scores
+			if err := m.planner.RecalculateThreadPriorities(ctx); err != nil {
+				log.Printf("Background thread priority recalculation failed: %v", err)
+				return
+			}
+			log.Println("Background: Thread priorities recalculated successfully")
+		}()
 	}
 
 	return nil
 }
 
 func (m PrioritiesModel) View() string {
+	if !m.ready {
+		return "Initializing..."
+	}
+
 	var b strings.Builder
 
 	contentStyle := lipgloss.NewStyle().
@@ -596,7 +619,9 @@ func (m PrioritiesModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render(helpText))
 
-	return contentStyle.Render(b.String())
+	content := contentStyle.Render(b.String())
+	m.viewport.SetContent(content)
+	return m.viewport.View()
 }
 
 func (m PrioritiesModel) renderSection(b *strings.Builder, title string, section prioritySection, items []string) {
