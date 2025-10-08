@@ -707,3 +707,90 @@ func (s *Scheduler) ReprocessAITasks() error {
 
 	return nil
 }
+
+// CleanupOtherPeoplesTasks deletes tasks assigned to other specific people
+func (s *Scheduler) CleanupOtherPeoplesTasks() error {
+	log.Println("═══════════════════════════════════════════════════════")
+	log.Println("🧹 CLEANING UP TASKS ASSIGNED TO OTHERS")
+	log.Println("═══════════════════════════════════════════════════════")
+
+	userEmail := strings.ToLower(s.config.Google.UserEmail)
+	if userEmail == "" {
+		return fmt.Errorf("user email not set in config")
+	}
+
+	log.Printf("User email: %s", userEmail)
+
+	// Query tasks that are NOT for the user
+	// Keep tasks where stakeholder is empty, "me", "you", or contains user email
+	// Delete everything else
+	query := `
+		SELECT id, title, stakeholder
+		FROM tasks
+		WHERE stakeholder IS NOT NULL
+		  AND stakeholder != ''
+		  AND LOWER(stakeholder) != 'me'
+		  AND LOWER(stakeholder) != 'you'
+		  AND LOWER(stakeholder) NOT LIKE ?
+	`
+
+	rows, err := s.db.Query(query, "%"+userEmail+"%")
+	if err != nil {
+		return fmt.Errorf("failed to query tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var tasksToDelete []struct {
+		ID          string
+		Title       string
+		Stakeholder string
+	}
+
+	for rows.Next() {
+		var t struct {
+			ID          string
+			Title       string
+			Stakeholder string
+		}
+		if err := rows.Scan(&t.ID, &t.Title, &t.Stakeholder); err != nil {
+			log.Printf("Failed to scan task: %v", err)
+			continue
+		}
+		tasksToDelete = append(tasksToDelete, t)
+	}
+
+	log.Printf("Found %d tasks assigned to other people:", len(tasksToDelete))
+	for _, t := range tasksToDelete {
+		log.Printf("  - [%s] %s → %s", t.ID[:8], t.Title, t.Stakeholder)
+	}
+
+	if len(tasksToDelete) == 0 {
+		log.Println("No tasks to delete.")
+		log.Println("═══════════════════════════════════════════════════════")
+		return nil
+	}
+
+	// Delete the tasks
+	deleteQuery := `
+		DELETE FROM tasks
+		WHERE stakeholder IS NOT NULL
+		  AND stakeholder != ''
+		  AND LOWER(stakeholder) != 'me'
+		  AND LOWER(stakeholder) != 'you'
+		  AND LOWER(stakeholder) NOT LIKE ?
+	`
+
+	result, err := s.db.Exec(deleteQuery, "%"+userEmail+"%")
+	if err != nil {
+		return fmt.Errorf("failed to delete tasks: %w", err)
+	}
+
+	rowsDeleted, _ := result.RowsAffected()
+
+	log.Println("═══════════════════════════════════════════════════════")
+	log.Printf("✅ CLEANUP COMPLETE:")
+	log.Printf("   Tasks deleted: %d", rowsDeleted)
+	log.Println("═══════════════════════════════════════════════════════")
+
+	return nil
+}

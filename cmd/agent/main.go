@@ -22,15 +22,16 @@ import (
 )
 
 var (
-	configFile     = flag.String("config", os.ExpandEnv("$HOME/.focus-agent/config.yaml"), "Path to configuration file")
-	runOnce        = flag.Bool("once", false, "Run once and exit (for testing)")
-	processOnly    = flag.Bool("process", false, "Process threads with AI and exit")
-	authOnly       = flag.Bool("auth", false, "Run OAuth flow only")
-	briefOnly      = flag.Bool("brief", false, "Generate and send brief immediately")
-	apiMode        = flag.Bool("api", false, "Run API server with scheduler (for remote TUI access)")
-	tuiMode        = flag.Bool("tui", false, "Run interactive TUI (Terminal User Interface)")
-	reprocessTasks = flag.Bool("reprocess-tasks", false, "Re-extract tasks from existing thread summaries with updated parser")
-	version        = flag.Bool("version", false, "Show version")
+	configFile      = flag.String("config", os.ExpandEnv("$HOME/.focus-agent/config.yaml"), "Path to configuration file")
+	runOnce         = flag.Bool("once", false, "Run once and exit (for testing)")
+	processOnly     = flag.Bool("process", false, "Process threads with AI and exit")
+	authOnly        = flag.Bool("auth", false, "Run OAuth flow only")
+	briefOnly       = flag.Bool("brief", false, "Generate and send brief immediately")
+	apiMode         = flag.Bool("api", false, "Run API server with scheduler (for remote TUI access)")
+	tuiMode         = flag.Bool("tui", false, "Run interactive TUI (Terminal User Interface)")
+	reprocessTasks  = flag.Bool("reprocess-tasks", false, "Re-extract tasks from existing thread summaries with updated parser")
+	cleanupOthers   = flag.Bool("cleanup-other-tasks", false, "Delete tasks assigned to other people (one-time cleanup)")
+	version         = flag.Bool("version", false, "Show version")
 )
 
 const VERSION = "0.1.0"
@@ -113,6 +114,16 @@ func main() {
 		sched := scheduler.New(database, googleClients, llmClient, plannerService, cfg)
 		if err := sched.ReprocessAITasks(); err != nil {
 			log.Fatalf("Failed to reprocess tasks: %v", err)
+		}
+		os.Exit(0)
+	}
+
+	// Handle cleanup-other-tasks mode
+	if *cleanupOthers {
+		log.Println("Cleaning up tasks assigned to other people...")
+		sched := scheduler.New(database, googleClients, llmClient, plannerService, cfg)
+		if err := sched.CleanupOtherPeoplesTasks(); err != nil {
+			log.Fatalf("Failed to cleanup tasks: %v", err)
 		}
 		os.Exit(0)
 	}

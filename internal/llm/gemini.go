@@ -399,7 +399,7 @@ func (g *GeminiClient) ExtractTasks(ctx context.Context, content string) ([]*db.
 	cached, err := g.db.GetCachedResponse(hash)
 	if err == nil && cached != nil {
 		log.Printf("Using cached task extraction")
-		return g.parseTasksFromResponse(cached.Response), nil
+		return g.filterTasksForUser(g.parseTasksFromResponse(cached.Response)), nil
 	}
 
 	// Wait for rate limit
@@ -434,7 +434,36 @@ func (g *GeminiClient) ExtractTasks(ctx context.Context, content string) ([]*db.
 	}
 	g.db.SaveCachedResponse(cache)
 
-	return g.parseTasksFromResponse(text), nil
+	return g.filterTasksForUser(g.parseTasksFromResponse(text)), nil
+}
+
+// filterTasksForUser filters out tasks assigned to other specific people
+func (g *GeminiClient) filterTasksForUser(tasks []*db.Task) []*db.Task {
+	userEmail := strings.ToLower(g.config.Google.UserEmail)
+	filtered := make([]*db.Task, 0, len(tasks))
+
+	for _, task := range tasks {
+		stakeholder := strings.ToLower(strings.TrimSpace(task.Stakeholder))
+
+		// Keep task if stakeholder is:
+		// - empty (unassigned, assume for user)
+		// - "me" or "you" (explicitly for user)
+		// - matches user's email
+		// - contains user's email
+		if stakeholder == "" ||
+			stakeholder == "me" ||
+			stakeholder == "you" ||
+			stakeholder == userEmail ||
+			strings.Contains(stakeholder, userEmail) {
+			filtered = append(filtered, task)
+			continue
+		}
+
+		// Skip tasks assigned to other specific people
+		log.Printf("Filtering out task assigned to '%s': %s", task.Stakeholder, task.Title)
+	}
+
+	return filtered
 }
 
 // DraftReply drafts a reply to an email
@@ -557,9 +586,22 @@ func (g *GeminiClient) buildThreadSummaryPrompt(messages []*db.Message) string {
 
 // buildTaskExtractionPrompt creates a prompt for task extraction
 func (g *GeminiClient) buildTaskExtractionPrompt(content string) string {
-	return fmt.Sprintf(`Extract action items from this content. For each task, provide:
+	userEmail := g.config.Google.UserEmail
+	if userEmail == "" {
+		userEmail = "the user"
+	}
+
+	return fmt.Sprintf(`Extract action items from this content that are FOR ME (%s) to do.
+
+IMPORTANT RULES:
+- ONLY extract tasks where I (%s) am responsible or need to take action
+- SKIP tasks assigned to other specific people (e.g., "Andrew: do X", "Maria: review Y")
+- INCLUDE tasks with no owner specified (assume they're for me)
+- INCLUDE tasks marked as "me", "you", or my email address
+
+For each task, provide:
 - Title (brief description)
-- Owner (if mentioned)
+- Owner (if mentioned, use "me" if it's for me, otherwise the person's name/email)
 - Due date/urgency (if mentioned)
 - Priority (High/Medium/Low based on context)
 
@@ -567,10 +609,12 @@ Content:
 %s
 
 Format as a numbered list. Example:
-1. Title: Review Q3 budget | Owner: Alex | Due: Friday | Priority: High
-2. Title: Send meeting notes | Owner: Me | Due: Today | Priority: Medium
+1. Title: Review Q3 budget | Owner: me | Due: Friday | Priority: High
+2. Title: Send meeting notes | Owner: me | Due: Today | Priority: Medium
 
-Tasks:`, content)
+Only extract tasks for me (%s). Skip tasks for other people.
+
+Tasks:`, userEmail, userEmail, content, userEmail)
 }
 
 // buildReplyPrompt creates a prompt for drafting replies
