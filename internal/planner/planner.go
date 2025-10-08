@@ -559,3 +559,7 @@ func (p *Planner) GetTaskStats() (map[string]interface{}, error) {
 
 	return stats, nil
 }
+// RecalculateThreadPriorities recalculates priority scores for all threads
+func (p *Planner) RecalculateThreadPriorities(ctx context.Context) error {
+	return p.db.RecalculateThreadPriorities()
+}

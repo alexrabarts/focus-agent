@@ -32,6 +32,7 @@ type Google struct {
 	RedirectURL    string   `yaml:"redirect_url"`
 	TokenFile      string   `yaml:"token_file"`
 	Scopes         []string `yaml:"scopes"`
+	UserEmail      string   `yaml:"user_email,omitempty"` // Populated from Gmail profile
 	PollingMinutes struct {
 		Gmail    int `yaml:"gmail"`
 		Drive    int `yaml:"drive"`

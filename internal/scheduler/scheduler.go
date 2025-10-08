@@ -2,9 +2,11 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -290,6 +292,136 @@ func (s *Scheduler) prioritizeTasks() {
 	}
 }
 
+// ProcessSingleThread processes a single thread with AI
+func (s *Scheduler) ProcessSingleThread(threadID string) error {
+	log.Printf("Processing thread %s with AI...", threadID)
+
+	// Get messages for thread (including labels to determine if in INBOX)
+	messagesQuery := `
+		SELECT id, thread_id, from_addr, to_addr, subject, snippet, body, labels, ts
+		FROM messages
+		WHERE thread_id = ?
+		ORDER BY ts DESC
+		LIMIT 20
+	`
+
+	msgRows, err := s.db.Query(messagesQuery, threadID)
+	if err != nil {
+		return fmt.Errorf("failed to get messages for thread %s: %w", threadID, err)
+	}
+	defer msgRows.Close()
+
+	var messages []*db.Message
+	hasInboxLabel := false
+	for msgRows.Next() {
+		msg := &db.Message{}
+		var ts int64
+		var labels string
+		err := msgRows.Scan(&msg.ID, &msg.ThreadID, &msg.From, &msg.To,
+			&msg.Subject, &msg.Snippet, &msg.Body, &labels, &ts)
+		if err != nil {
+			continue
+		}
+		msg.Timestamp = time.Unix(ts, 0)
+		messages = append(messages, msg)
+
+		// Check if any message in thread has INBOX label
+		if strings.Contains(strings.ToLower(labels), "inbox") {
+			hasInboxLabel = true
+		}
+	}
+
+	if len(messages) == 0 {
+		return fmt.Errorf("no messages found for thread %s", threadID)
+	}
+
+	// Prepare metadata for smart model selection
+	metadata := llm.ThreadMetadata{
+		QueueSize:    1, // Processing single thread
+		SenderEmail:  messages[0].From,
+		Timestamp:    messages[0].Timestamp,
+		MessageCount: len(messages),
+	}
+
+	// Generate summary with smart model selection
+	summary, err := s.llm.SummarizeThreadWithModelSelection(s.ctx, messages, metadata)
+	if err != nil {
+		return fmt.Errorf("failed to summarize thread %s: %w", threadID, err)
+	}
+
+	// Extract tasks
+	tasks, err := s.llm.ExtractTasks(s.ctx, summary)
+	if err != nil {
+		log.Printf("Failed to extract tasks from thread %s: %v", threadID, err)
+	}
+
+	// Save summary and tasks
+	thread := &db.Thread{
+		ID:        threadID,
+		Summary:   summary,
+		TaskCount: len(tasks),
+	}
+
+	if err := s.db.SaveThread(thread); err != nil {
+		return fmt.Errorf("failed to save thread summary: %w", err)
+	}
+
+	// Save extracted tasks
+	for _, task := range tasks {
+		// Set source_id to thread ID so we can link tasks to threads
+		task.SourceID = threadID
+		if err := s.db.SaveTask(task); err != nil {
+			log.Printf("Failed to save extracted task: %v", err)
+		}
+	}
+
+	// Prioritize tasks (instant, no tokens - pure algorithm)
+	if err := s.planner.PrioritizeTasks(s.ctx); err != nil {
+		log.Printf("Failed to prioritize tasks: %v", err)
+	}
+
+	// Calculate thread priority score from task scores
+	var priorityScore float64
+	relevantToUser := false
+
+	if len(tasks) > 0 {
+		// Query saved tasks to get their scores
+		taskQuery := `SELECT score FROM tasks WHERE source = 'gmail' AND source_id = ? ORDER BY score DESC LIMIT 1`
+		var maxScore sql.NullFloat64
+		if err := s.db.QueryRow(taskQuery, threadID).Scan(&maxScore); err == nil && maxScore.Valid {
+			priorityScore = maxScore.Float64
+		}
+
+		// Determine if relevant to user:
+		// 1. If in INBOX (primary heuristic)
+		// 2. AND any task owner is unspecified, "me", "you", or matches user email
+		if hasInboxLabel {
+			relevantToUser = true // In inbox means it's for the user
+
+			// Could add more specific owner checking here if needed
+			userEmail := strings.ToLower(s.config.Google.UserEmail)
+			for _, task := range tasks {
+				owner := strings.ToLower(task.Stakeholder)
+				if owner == "" || owner == "me" || owner == "you" || owner == userEmail || strings.Contains(owner, userEmail) {
+					relevantToUser = true
+					break
+				}
+			}
+		}
+	}
+
+	// Update thread with priority information
+	thread.PriorityScore = priorityScore
+	thread.RelevantToUser = relevantToUser
+	if err := s.db.SaveThread(thread); err != nil {
+		return fmt.Errorf("failed to update thread priority: %w", err)
+	}
+
+	log.Printf("Processed thread %s: summary generated, %d tasks extracted, priority=%.2f, relevant=%v",
+		threadID, len(tasks), priorityScore, relevantToUser)
+	return nil
+}
+
 // ProcessNewMessages processes new messages for summaries and task extraction
 func (s *Scheduler) ProcessNewMessages() {
 	log.Println("Processing new messages with AI...")
@@ -421,6 +553,8 @@ func (s *Scheduler) ProcessNewMessages() {
 
 		// Save extracted tasks
 		for _, task := range tasks {
+			// Set source_id to thread ID so we can link tasks to threads
+			task.SourceID = threadID
 			if err := s.db.SaveTask(task); err != nil {
 				log.Printf("Failed to save extracted task: %v", err)
 			}

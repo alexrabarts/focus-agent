@@ -68,7 +68,7 @@ func RunMigrations(db *DB) error {
 		return fmt.Errorf("failed to find migration files: %w", err)
 	}
 
-	// Execute each migration
+	// Execute each SQL migration
 	for _, file := range files {
 		content, err := os.ReadFile(file)
 		if err != nil {
@@ -78,6 +78,11 @@ func RunMigrations(db *DB) error {
 		if _, err := db.Exec(string(content)); err != nil {
 			return fmt.Errorf("failed to execute migration %s: %w", file, err)
 		}
+	}
+
+	// Run structured Go migrations
+	if err := RunStructuredMigrations(db); err != nil {
+		return fmt.Errorf("failed to run structured migrations: %w", err)
 	}
 
 	return nil

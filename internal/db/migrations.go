@@ -102,6 +102,42 @@ func GetMigrations() []Migration {
 				return nil
 			},
 		},
+		{
+			Version: 2,
+			Name:    "add_thread_priority_fields",
+			Up: func(tx *sql.Tx) error {
+				// Add priority_score and relevant_to_user columns to threads table
+				_, err := tx.Exec(`
+					ALTER TABLE threads ADD COLUMN priority_score REAL DEFAULT 0;
+				`)
+				if err != nil {
+					return fmt.Errorf("failed to add priority_score column: %w", err)
+				}
+
+				_, err = tx.Exec(`
+					ALTER TABLE threads ADD COLUMN relevant_to_user INTEGER DEFAULT 0;
+				`)
+				if err != nil {
+					return fmt.Errorf("failed to add relevant_to_user column: %w", err)
+				}
+
+				// Create index on priority_score for sorting
+				_, err = tx.Exec(`
+					CREATE INDEX IF NOT EXISTS idx_threads_priority ON threads(priority_score DESC);
+				`)
+				if err != nil {
+					return fmt.Errorf("failed to create priority index: %w", err)
+				}
+
+				return nil
+			},
+			Down: func(tx *sql.Tx) error {
+				// Note: SQLite doesn't support DROP COLUMN until version 3.35.0
+				// For compatibility, we'll leave the columns but could recreate table if needed
+				_, err := tx.Exec(`DROP INDEX IF EXISTS idx_threads_priority`)
+				return err
+			},
+		},
 		// Add future migrations here
 	}
 }

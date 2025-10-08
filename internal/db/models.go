@@ -26,15 +26,17 @@ type Message struct {
 
 // Thread represents an email conversation
 type Thread struct {
-	ID             string    `json:"id"`
-	LastHistoryID  string    `json:"last_history_id"`
-	Summary        string    `json:"summary"`
-	SummaryHash    string    `json:"summary_hash"`
-	TaskCount      int       `json:"task_count"`
+	ID             string     `json:"id"`
+	LastHistoryID  string     `json:"last_history_id"`
+	Summary        string     `json:"summary"`
+	SummaryHash    string     `json:"summary_hash"`
+	TaskCount      int        `json:"task_count"`
+	PriorityScore  float64    `json:"priority_score"`
+	RelevantToUser bool       `json:"relevant_to_user"`
 	NextFollowupTS *time.Time `json:"next_followup_ts"`
-	LastSynced     time.Time `json:"last_synced"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	LastSynced     time.Time  `json:"last_synced"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 // Task represents a work item
@@ -151,20 +153,27 @@ func (db *DB) SaveThread(thread *Thread) error {
 	}
 
 	query := `
-		INSERT INTO threads (id, last_history_id, summary, summary_hash, task_count, next_followup_ts, last_synced)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO threads (id, last_history_id, summary, summary_hash, task_count, priority_score, relevant_to_user, next_followup_ts, last_synced)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			last_history_id = excluded.last_history_id,
 			summary = excluded.summary,
 			summary_hash = excluded.summary_hash,
 			task_count = excluded.task_count,
+			priority_score = excluded.priority_score,
+			relevant_to_user = excluded.relevant_to_user,
 			next_followup_ts = excluded.next_followup_ts,
 			last_synced = excluded.last_synced
 	`
 
+	relevantToUserInt := 0
+	if thread.RelevantToUser {
+		relevantToUserInt = 1
+	}
+
 	_, err := db.Exec(query,
 		thread.ID, thread.LastHistoryID, thread.Summary, thread.SummaryHash,
-		thread.TaskCount, nextFollowup, thread.LastSynced.Unix(),
+		thread.TaskCount, thread.PriorityScore, relevantToUserInt, nextFollowup, thread.LastSynced.Unix(),
 	)
 	return err
 }
@@ -534,10 +543,10 @@ func (db *DB) SaveDocument(doc *Document) error {
 func (db *DB) GetThreadsWithSummaries(limit int) ([]*Thread, error) {
 	query := `
 		SELECT t.id, t.last_history_id, t.summary, t.summary_hash, t.task_count,
-		       t.next_followup_ts, t.last_synced, t.created_at, t.updated_at
+		       t.priority_score, t.relevant_to_user, t.next_followup_ts, t.last_synced, t.created_at, t.updated_at
 		FROM threads t
 		WHERE t.summary IS NOT NULL AND t.summary != ''
-		ORDER BY t.last_synced DESC
+		ORDER BY t.priority_score DESC, t.last_synced DESC
 		LIMIT ?
 	`
 
@@ -551,14 +560,17 @@ func (db *DB) GetThreadsWithSummaries(limit int) ([]*Thread, error) {
 	for rows.Next() {
 		thread := &Thread{}
 		var nextFollowupTS, lastSyncedTS, createdTS, updatedTS sql.NullInt64
+		var relevantToUserInt int
 
 		err := rows.Scan(
 			&thread.ID, &thread.LastHistoryID, &thread.Summary, &thread.SummaryHash,
-			&thread.TaskCount, &nextFollowupTS, &lastSyncedTS, &createdTS, &updatedTS,
+			&thread.TaskCount, &thread.PriorityScore, &relevantToUserInt, &nextFollowupTS, &lastSyncedTS, &createdTS, &updatedTS,
 		)
 		if err != nil {
 			return nil, err
 		}
+
+		thread.RelevantToUser = relevantToUserInt != 0
 
 		if nextFollowupTS.Valid {
 			t := time.Unix(nextFollowupTS.Int64, 0)
@@ -663,4 +675,45 @@ func (db *DB) GetThreadMessages(threadID string) ([]*Message, error) {
 	}
 
 	return messages, nil
+}
+// RecalculateThreadPriorities updates priority scores for all threads based on their tasks
+func (db *DB) RecalculateThreadPriorities() error {
+	// Get all threads with summaries
+	query := `SELECT id FROM threads WHERE summary IS NOT NULL AND summary != ''`
+	rows, err := db.Query(query)
+	if err != nil {
+		return fmt.Errorf("failed to query threads: %w", err)
+	}
+	defer rows.Close()
+
+	var threadIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		threadIDs = append(threadIDs, id)
+	}
+
+	// For each thread, calculate priority from its tasks
+	updateQuery := `
+		UPDATE threads
+		SET priority_score = (
+			SELECT COALESCE(MAX(score), 0)
+			FROM tasks
+			WHERE source = 'ai' AND source_id = ?
+		)
+		WHERE id = ?
+	`
+
+	updated := 0
+	for _, threadID := range threadIDs {
+		if _, err := db.Exec(updateQuery, threadID, threadID); err != nil {
+			// Log but continue
+			continue
+		}
+		updated++
+	}
+
+	return nil
 }

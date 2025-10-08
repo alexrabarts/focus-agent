@@ -74,10 +74,16 @@ func (g *GmailClient) SyncThreads(ctx context.Context, database *db.DB) error {
 func (g *GmailClient) fullSync(ctx context.Context, database *db.DB, state *GmailSyncState) error {
 	log.Println("Starting Gmail full sync...")
 
-	// Get profile to get history ID
+	// Get profile to get history ID and user email
 	profile, err := g.Service.Users.GetProfile("me").Context(ctx).Do()
 	if err != nil {
 		return fmt.Errorf("failed to get profile: %w", err)
+	}
+
+	// Save user email to config if not already set
+	if g.Config.Google.UserEmail == "" && profile.EmailAddress != "" {
+		g.Config.Google.UserEmail = profile.EmailAddress
+		log.Printf("Captured user email: %s", profile.EmailAddress)
 	}
 
 	// Build comprehensive query to catch important items

@@ -11,6 +11,7 @@ import (
 	"github.com/alexrabarts/focus-agent/internal/google"
 	"github.com/alexrabarts/focus-agent/internal/llm"
 	"github.com/alexrabarts/focus-agent/internal/planner"
+	"github.com/alexrabarts/focus-agent/internal/scheduler"
 )
 
 type view int
@@ -18,6 +19,7 @@ type view int
 const (
 	tasksView view = iota
 	prioritiesView
+	queueView
 	threadsView
 	statsView
 )
@@ -51,15 +53,24 @@ type Model struct {
 	// Sub-models
 	tasksModel      TasksModel
 	prioritiesModel PrioritiesModel
+	queueModel      QueueModel
 	statsModel      StatsModel
 	threadsModel    ThreadsModel
+
+	// State
+	lastRefreshTime time.Time
 }
 
 func NewModel(database *db.DB, clients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config) Model {
 	// Initialize API client if remote mode is configured
 	var apiClient *APIClient
+	var sched *scheduler.Scheduler
+
 	if cfg.Remote.URL != "" {
 		apiClient = NewAPIClient(cfg)
+	} else {
+		// For local mode, create a scheduler for processing
+		sched = scheduler.New(database, clients, llmClient, plannerService, cfg)
 	}
 
 	return Model{
@@ -71,9 +82,11 @@ func NewModel(database *db.DB, clients *google.Clients, llmClient *llm.GeminiCli
 		config:          cfg,
 		apiClient:       apiClient,
 		tasksModel:      NewTasksModel(database, plannerService, apiClient),
-		prioritiesModel: NewPrioritiesModel(cfg, apiClient),
+		prioritiesModel: NewPrioritiesModel(cfg, plannerService, apiClient),
+		queueModel:      NewQueueModel(database, apiClient, sched),
 		statsModel:      NewStatsModel(database, apiClient),
 		threadsModel:    NewThreadsModel(database, apiClient),
+		lastRefreshTime: time.Now(),
 	}
 }
 
@@ -81,6 +94,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.tasksModel.fetchTasks(),
 		m.statsModel.fetchStats(),
+		m.queueModel.fetchQueue(),
 		m.threadsModel.fetchThreads(),
 		tick(m.config), // Start auto-refresh ticker
 	)
@@ -94,7 +108,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		// Auto-refresh current view and stats (for footer), then schedule next tick
+		// Update last refresh time and auto-refresh current view and stats (for footer), then schedule next tick
+		m.lastRefreshTime = time.Now()
 		return m, tea.Batch(
 			m.refreshCurrentView(),
 			m.statsModel.fetchStats(), // Always refresh stats for footer queue count
@@ -105,8 +120,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Check if priorities view is in input mode
 		inInputMode := m.currentView == prioritiesView && m.prioritiesModel.IsInInputMode()
 
-		// Only handle navigation keys when not in input mode
-		if !inInputMode {
+		// Check if threads view is in detail mode
+		inThreadDetail := m.currentView == threadsView && m.threadsModel.selectedThread != nil
+
+		// Check if queue view is in detail mode
+		inQueueDetail := m.currentView == queueView && m.queueModel.selectedItem != nil
+
+		// Only handle navigation keys when not in input mode or detail view
+		if !inInputMode && !inThreadDetail && !inQueueDetail {
 			switch msg.String() {
 			case "ctrl+c", "q":
 				return m, tea.Quit
@@ -146,6 +167,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tasksModel, cmd = m.tasksModel.Update(msg)
 	case prioritiesView:
 		m.prioritiesModel, cmd = m.prioritiesModel.Update(msg)
+	case queueView:
+		m.queueModel, cmd = m.queueModel.Update(msg)
 	case statsView:
 		// Already updated above
 	case threadsView:
@@ -159,6 +182,8 @@ func (m Model) refreshCurrentView() tea.Cmd {
 	switch m.currentView {
 	case tasksView:
 		return m.tasksModel.fetchTasks()
+	case queueView:
+		return m.queueModel.fetchQueue()
 	case statsView:
 		return m.statsModel.fetchStats()
 	case threadsView:
@@ -183,6 +208,8 @@ func (m Model) View() string {
 		content = m.tasksModel.View()
 	case prioritiesView:
 		content = m.prioritiesModel.View()
+	case queueView:
+		content = m.queueModel.View()
 	case statsView:
 		content = m.statsModel.View()
 	case threadsView:
@@ -213,7 +240,7 @@ func (m Model) renderHeader() string {
 	title := titleStyle.Render("Focus Agent")
 
 	tabs := ""
-	for i, label := range []string{"Tasks", "Priorities", "Threads", "About"} {
+	for i, label := range []string{"Tasks", "Priorities", "Queue", "Threads", "About"} {
 		if view(i) == m.currentView {
 			tabs += activeTabStyle.Render(label)
 		} else {
@@ -242,12 +269,36 @@ func (m Model) renderFooter() string {
 		footer += fmt.Sprintf(" | 📋 Queue: %d", stats.ThreadsNeedingAI)
 	}
 
-	// Add refresh indicator if auto-refresh is enabled
+	// Add last refresh time if auto-refresh is enabled
 	if m.config.TUI.AutoRefreshSeconds > 0 {
-		footer += fmt.Sprintf(" | ↻ %ds", m.config.TUI.AutoRefreshSeconds)
+		footer += fmt.Sprintf(" | %s", m.formatLastRefresh())
 	}
 
 	return helpStyle.Render(footer)
+}
+
+// formatLastRefresh returns a human-readable string for when data was last refreshed
+func (m Model) formatLastRefresh() string {
+	if m.lastRefreshTime.IsZero() {
+		return "Updated: never"
+	}
+
+	elapsed := time.Since(m.lastRefreshTime)
+
+	if elapsed < 5*time.Second {
+		return "Updated: just now"
+	} else if elapsed < time.Minute {
+		return fmt.Sprintf("Updated: %ds ago", int(elapsed.Seconds()))
+	} else if elapsed < time.Hour {
+		mins := int(elapsed.Minutes())
+		return fmt.Sprintf("Updated: %dm ago", mins)
+	} else if elapsed < 24*time.Hour {
+		hours := int(elapsed.Hours())
+		return fmt.Sprintf("Updated: %dh ago", hours)
+	} else {
+		// For older updates, show the actual time
+		return fmt.Sprintf("Updated: %s", m.lastRefreshTime.Format("15:04"))
+	}
 }
 
 func Start(database *db.DB, clients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config) error {

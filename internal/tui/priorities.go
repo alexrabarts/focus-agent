@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/alexrabarts/focus-agent/internal/config"
+	"github.com/alexrabarts/focus-agent/internal/planner"
 	"gopkg.in/yaml.v3"
 )
 
@@ -34,6 +36,7 @@ type PrioritiesModel struct {
 	config             *config.Config
 	configPath         string
 	apiClient          *APIClient
+	planner            *planner.Planner
 	currentSection     prioritySection
 	cursor             int
 	mode               inputMode
@@ -43,7 +46,7 @@ type PrioritiesModel struct {
 	message            string
 }
 
-func NewPrioritiesModel(cfg *config.Config, apiClient *APIClient) PrioritiesModel {
+func NewPrioritiesModel(cfg *config.Config, plannerService *planner.Planner, apiClient *APIClient) PrioritiesModel {
 	ti := textinput.New()
 	ti.Placeholder = "Enter new priority..."
 	ti.CharLimit = 200
@@ -52,6 +55,7 @@ func NewPrioritiesModel(cfg *config.Config, apiClient *APIClient) PrioritiesMode
 		config:             cfg,
 		configPath:         os.ExpandEnv("$HOME/.focus-agent/config.yaml"),
 		apiClient:          apiClient,
+		planner:            plannerService,
 		currentSection:     okrsSection,
 		cursor:             0,
 		mode:               normalMode,
@@ -510,6 +514,22 @@ func (m PrioritiesModel) saveConfig() error {
 	// Write back to file
 	if err := os.WriteFile(m.configPath, newData, 0644); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
+	}
+
+	// Trigger rescore of tasks with new priorities (instant, no tokens)
+	if m.planner != nil {
+		ctx := context.Background()
+		if err := m.planner.PrioritizeTasks(ctx); err != nil {
+			// Log error but don't fail the save
+			// The rescore will happen on next scheduled run
+			return fmt.Errorf("config saved but rescore failed: %w", err)
+		}
+
+		// Recalculate thread priorities based on updated task scores
+		if err := m.planner.RecalculateThreadPriorities(ctx); err != nil {
+			// Log error but don't fail the save
+			return fmt.Errorf("config saved but thread priority recalculation failed: %w", err)
+		}
 	}
 
 	return nil
