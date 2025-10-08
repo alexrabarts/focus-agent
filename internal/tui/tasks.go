@@ -20,6 +20,8 @@ type TasksModel struct {
 	loading             bool
 	err                 error
 	lastCompletedTaskID string
+	selectedTask        *db.Task // Currently selected task for detail view
+	detailScroll        int      // Scroll position in detail view
 }
 
 type tasksLoadedMsg struct {
@@ -62,6 +64,32 @@ func (m TasksModel) Update(msg tea.Msg) (TasksModel, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// If in detail view, handle detail-specific keys
+		if m.selectedTask != nil {
+			switch msg.String() {
+			case "esc", "q":
+				// Return to list view
+				m.selectedTask = nil
+				m.detailScroll = 0
+				return m, nil
+			case "up", "k":
+				if m.detailScroll > 0 {
+					m.detailScroll--
+				}
+			case "down", "j":
+				m.detailScroll++
+			case "c":
+				// Complete task from detail view
+				task := m.selectedTask
+				m.lastCompletedTaskID = task.ID
+				m.selectedTask = nil // Return to list
+				m.detailScroll = 0
+				return m, m.completeTask(task)
+			}
+			return m, nil
+		}
+
+		// List view key handling
 		switch msg.String() {
 		case "up", "k":
 			if m.cursor > 0 {
@@ -72,7 +100,13 @@ func (m TasksModel) Update(msg tea.Msg) (TasksModel, tea.Cmd) {
 				m.cursor++
 			}
 		case "enter":
-			// Complete task
+			// Open task detail view
+			if m.cursor < len(m.tasks) {
+				m.selectedTask = m.tasks[m.cursor]
+				m.detailScroll = 0
+			}
+		case "c":
+			// Complete task from list view
 			if m.cursor < len(m.tasks) {
 				task := m.tasks[m.cursor]
 				m.lastCompletedTaskID = task.ID // Store for undo
@@ -165,6 +199,11 @@ func (m TasksModel) View() string {
 		return errorStyle.Render(fmt.Sprintf("Error: %v", m.err))
 	}
 
+	// If in detail view, show task detail
+	if m.selectedTask != nil {
+		return m.renderTaskDetail()
+	}
+
 	if len(m.tasks) == 0 {
 		emptyStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
@@ -241,7 +280,7 @@ func (m TasksModel) View() string {
 		Padding(1, 0, 0, 1)
 
 	b.WriteString("\n")
-	helpText := "enter: complete task | r: refresh"
+	helpText := "enter: view details | c: complete task | r: refresh"
 	if m.lastCompletedTaskID != "" {
 		helpText += " | u: undo"
 	}
@@ -283,4 +322,169 @@ func (m TasksModel) renderTask(task *db.Task, selected bool) string {
 		return selectedStyle.Render(taskText) + "\n"
 	}
 	return taskStyle.Render(taskText) + "\n"
+}
+
+func (m TasksModel) renderTaskDetail() string {
+	var b strings.Builder
+	task := m.selectedTask
+
+	// Header with task title
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("39")).
+		Padding(0, 1)
+
+	b.WriteString(headerStyle.Render(fmt.Sprintf("✅ %s", task.Title)) + "\n\n")
+
+	// Task Information section
+	infoTitleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("208")).
+		Padding(0, 1)
+
+	infoStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252")).
+		Padding(0, 2)
+
+	b.WriteString(infoTitleStyle.Render("📋 Task Information:") + "\n")
+
+	// Source
+	b.WriteString(infoStyle.Render(fmt.Sprintf("Source: %s", task.Source)))
+	if task.SourceID != "" {
+		b.WriteString(fmt.Sprintf(" (ID: %s)", task.SourceID))
+	}
+	b.WriteString("\n")
+
+	// Stakeholder
+	if task.Stakeholder != "" {
+		b.WriteString(infoStyle.Render(fmt.Sprintf("Owner/Stakeholder: %s", task.Stakeholder)) + "\n")
+	}
+
+	// Project
+	if task.Project != "" {
+		b.WriteString(infoStyle.Render(fmt.Sprintf("Project: %s", task.Project)) + "\n")
+	}
+
+	// Due date
+	if task.DueTS != nil {
+		dueStr := task.DueTS.Format("Mon, Jan 2, 2006 15:04")
+		b.WriteString(infoStyle.Render(fmt.Sprintf("Due: %s", dueStr)) + "\n")
+	}
+
+	// Status
+	b.WriteString(infoStyle.Render(fmt.Sprintf("Status: %s", task.Status)) + "\n")
+
+	// Timestamps
+	b.WriteString(infoStyle.Render(fmt.Sprintf("Created: %s", task.CreatedAt.Format("Jan 2, 15:04"))) + "\n")
+
+	// Description if exists
+	if task.Description != "" {
+		b.WriteString("\n")
+		b.WriteString(infoTitleStyle.Render("📝 Description:") + "\n")
+		b.WriteString(infoStyle.Render(task.Description) + "\n")
+	}
+
+	// Score Breakdown section
+	b.WriteString("\n")
+	scoreTitleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("45")).
+		Padding(0, 1)
+
+	b.WriteString(scoreTitleStyle.Render("🎯 Priority Score Breakdown:") + "\n")
+
+	scoreStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("250")).
+		Padding(0, 2)
+
+	// Calculate individual components
+	impact := float64(task.Impact)
+	if impact == 0 {
+		impact = 3
+	}
+	urgency := float64(task.Urgency)
+	if urgency == 0 {
+		urgency = 3
+	}
+
+	effortFactor := 1.0
+	effortLabel := "Medium"
+	switch task.Effort {
+	case "S":
+		effortFactor = 0.5
+		effortLabel = "Small"
+	case "L":
+		effortFactor = 1.5
+		effortLabel = "Large"
+	}
+
+	stakeholderWeight := 1.0
+	stakeholderLabel := "Internal"
+	switch task.Stakeholder {
+	case "external":
+		stakeholderWeight = 1.5
+		stakeholderLabel = "External"
+	case "executive":
+		stakeholderWeight = 2.0
+		stakeholderLabel = "Executive"
+	}
+
+	// Calculate contributions
+	impactContribution := 0.3 * impact
+	urgencyContribution := 0.25 * urgency
+	effortContribution := -0.1 * effortFactor
+	stakeholderContribution := 0.15 * stakeholderWeight
+	strategicContribution := 0.0 // We don't have this calculated at display time
+
+	b.WriteString(scoreStyle.Render("Formula: 0.3×impact + 0.25×urgency + 0.2×strategic - 0.1×effort + 0.15×stakeholder") + "\n\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Impact: %.0f/5 (weight: 0.3) → +%.2f", impact, impactContribution)) + "\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Urgency: %.0f/5 (weight: 0.25) → +%.2f", urgency, urgencyContribution)) + "\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Strategic Alignment: %.1f/5 (weight: 0.2) → +%.2f", strategicContribution, strategicContribution)) + "\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Effort: %s (%.1f, weight: -0.1) → %.2f", effortLabel, effortFactor, effortContribution)) + "\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("└─ Stakeholder: %s (%.1f, weight: 0.15) → +%.2f", stakeholderLabel, stakeholderWeight, stakeholderContribution)) + "\n")
+	b.WriteString(scoreStyle.Render("──────────────────────────────────────────") + "\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("Total Score: %.2f/5", task.Score)) + "\n")
+
+	// Source Context section (for AI tasks)
+	if task.Source == "ai" && task.SourceID != "" {
+		b.WriteString("\n")
+		contextTitleStyle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("13")).
+			Padding(0, 1)
+
+		b.WriteString(contextTitleStyle.Render("🔗 Source Context:") + "\n")
+
+		contextStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("250")).
+			Padding(0, 2)
+
+		b.WriteString(contextStyle.Render(fmt.Sprintf("Extracted from email thread: %s", task.SourceID)) + "\n")
+
+		// Try to fetch thread summary
+		var thread *db.Thread
+		if m.apiClient != nil {
+			// Would need to add API endpoint for this
+			b.WriteString(contextStyle.Render("(Thread summary not available in remote mode)") + "\n")
+		} else {
+			thread, _ = m.database.GetThreadByID(task.SourceID)
+			if thread != nil && thread.Summary != "" {
+				summary := thread.Summary
+				if len(summary) > 200 {
+					summary = summary[:197] + "..."
+				}
+				b.WriteString(contextStyle.Render(fmt.Sprintf("Thread summary: %s", summary)) + "\n")
+			}
+		}
+	}
+
+	// Help text
+	b.WriteString("\n")
+	helpStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241")).
+		Padding(1, 0, 0, 1)
+
+	b.WriteString(helpStyle.Render("c: complete task | esc/q: back to list | ↑/↓: scroll"))
+
+	return b.String()
 }
