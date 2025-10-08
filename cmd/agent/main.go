@@ -22,14 +22,15 @@ import (
 )
 
 var (
-	configFile  = flag.String("config", os.ExpandEnv("$HOME/.focus-agent/config.yaml"), "Path to configuration file")
-	runOnce     = flag.Bool("once", false, "Run once and exit (for testing)")
-	processOnly = flag.Bool("process", false, "Process threads with AI and exit")
-	authOnly    = flag.Bool("auth", false, "Run OAuth flow only")
-	briefOnly   = flag.Bool("brief", false, "Generate and send brief immediately")
-	apiMode     = flag.Bool("api", false, "Run API server with scheduler (for remote TUI access)")
-	tuiMode     = flag.Bool("tui", false, "Run interactive TUI (Terminal User Interface)")
-	version     = flag.Bool("version", false, "Show version")
+	configFile     = flag.String("config", os.ExpandEnv("$HOME/.focus-agent/config.yaml"), "Path to configuration file")
+	runOnce        = flag.Bool("once", false, "Run once and exit (for testing)")
+	processOnly    = flag.Bool("process", false, "Process threads with AI and exit")
+	authOnly       = flag.Bool("auth", false, "Run OAuth flow only")
+	briefOnly      = flag.Bool("brief", false, "Generate and send brief immediately")
+	apiMode        = flag.Bool("api", false, "Run API server with scheduler (for remote TUI access)")
+	tuiMode        = flag.Bool("tui", false, "Run interactive TUI (Terminal User Interface)")
+	reprocessTasks = flag.Bool("reprocess-tasks", false, "Re-extract tasks from existing thread summaries with updated parser")
+	version        = flag.Bool("version", false, "Show version")
 )
 
 const VERSION = "0.1.0"
@@ -106,6 +107,16 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Handle reprocess-tasks mode
+	if *reprocessTasks {
+		log.Println("Re-extracting tasks from existing thread summaries...")
+		sched := scheduler.New(database, googleClients, llmClient, plannerService, cfg)
+		if err := sched.ReprocessAITasks(); err != nil {
+			log.Fatalf("Failed to reprocess tasks: %v", err)
+		}
+		os.Exit(0)
+	}
+
 	// Handle TUI mode
 	if *tuiMode {
 		log.Println("Starting TUI...")
@@ -115,10 +126,14 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Initialize scheduler first
+	sched := scheduler.New(database, googleClients, llmClient, plannerService, cfg)
+
 	// Handle API mode or if API is enabled in config
 	if *apiMode || cfg.API.Enabled {
 		// Start API server in background
 		apiServer := api.NewServer(database, googleClients, llmClient, plannerService, cfg)
+		apiServer.SetScheduler(sched)
 
 		go func() {
 			log.Printf("API server starting on port %d", cfg.API.Port)
@@ -130,9 +145,6 @@ func main() {
 		// If -api flag is set, run scheduler + API server together
 		// If just config enabled, continue to scheduler below
 	}
-
-	// Initialize scheduler
-	sched := scheduler.New(database, googleClients, llmClient, plannerService, cfg)
 
 	// Handle run-once mode
 	if *runOnce {

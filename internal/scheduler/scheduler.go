@@ -619,3 +619,91 @@ func (s *Scheduler) GetNextRuns() map[string]time.Time {
 
 	return nextRuns
 }
+
+// ReprocessAITasks re-extracts tasks from existing thread summaries with the updated parser
+func (s *Scheduler) ReprocessAITasks() error {
+	log.Println("═══════════════════════════════════════════════════════")
+	log.Println("🔄 REPROCESSING AI TASKS")
+	log.Println("═══════════════════════════════════════════════════════")
+
+	// Step 1: Get all threads with summaries
+	threadsQuery := `SELECT id, summary FROM threads WHERE summary IS NOT NULL AND summary <> '' ORDER BY id`
+	rows, err := s.db.Query(threadsQuery)
+	if err != nil {
+		return fmt.Errorf("failed to query threads: %w", err)
+	}
+	defer rows.Close()
+
+	type threadSummary struct {
+		ID      string
+		Summary string
+	}
+
+	var threads []threadSummary
+	for rows.Next() {
+		var t threadSummary
+		if err := rows.Scan(&t.ID, &t.Summary); err != nil {
+			log.Printf("Failed to scan thread: %v", err)
+			continue
+		}
+		threads = append(threads, t)
+	}
+
+	log.Printf("Found %d threads with summaries", len(threads))
+
+	// Step 2: Delete all existing AI tasks
+	deleteQuery := `DELETE FROM tasks WHERE source = 'ai'`
+	result, err := s.db.Exec(deleteQuery)
+	if err != nil {
+		return fmt.Errorf("failed to delete AI tasks: %w", err)
+	}
+
+	rowsDeleted, _ := result.RowsAffected()
+	log.Printf("Deleted %d old AI tasks", rowsDeleted)
+
+	// Step 3: Re-extract tasks from summaries using new parser
+	totalTasks := 0
+	for i, thread := range threads {
+		log.Printf("Processing thread %d/%d: %s", i+1, len(threads), thread.ID)
+
+		// Extract tasks from summary
+		tasks, err := s.llm.ExtractTasks(s.ctx, thread.Summary)
+		if err != nil {
+			log.Printf("Failed to extract tasks from thread %s: %v", thread.ID, err)
+			continue
+		}
+
+		// Save extracted tasks
+		for _, task := range tasks {
+			task.SourceID = thread.ID
+			if err := s.db.SaveTask(task); err != nil {
+				log.Printf("Failed to save task: %v", err)
+				continue
+			}
+			totalTasks++
+		}
+
+		log.Printf("  Extracted %d tasks from thread %s", len(tasks), thread.ID)
+	}
+
+	// Step 4: Recalculate priorities
+	log.Println("Recalculating task priorities...")
+	if err := s.planner.PrioritizeTasks(s.ctx); err != nil {
+		log.Printf("Warning: Failed to prioritize tasks: %v", err)
+	}
+
+	// Step 5: Recalculate thread priorities
+	log.Println("Recalculating thread priorities...")
+	if err := s.planner.RecalculateThreadPriorities(s.ctx); err != nil {
+		log.Printf("Warning: Failed to recalculate thread priorities: %v", err)
+	}
+
+	log.Println("═══════════════════════════════════════════════════════")
+	log.Printf("✅ REPROCESSING COMPLETE:")
+	log.Printf("   Processed threads: %d", len(threads))
+	log.Printf("   Old tasks deleted: %d", rowsDeleted)
+	log.Printf("   New tasks extracted: %d", totalTasks)
+	log.Println("═══════════════════════════════════════════════════════")
+
+	return nil
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -634,52 +635,180 @@ func (g *GeminiClient) buildMeetingPrepPrompt(event *db.Event, docs []*db.Docume
 }
 
 // parseTasksFromResponse parses tasks from LLM response
+// Handles both single-line format: "1. Title: X | Owner: Y | Due: Z | Priority: W"
+// And multi-line format:
+//   1. **Title:** X
+//      * **Owner:** Y
+//      * **Due:** Z
 func (g *GeminiClient) parseTasksFromResponse(response string) []*db.Task {
 	var tasks []*db.Task
 
 	lines := strings.Split(response, "\n")
+	var currentTask *db.Task
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 
-		// Parse task from line (basic parsing, could be improved)
-		task := &db.Task{
-			ID:     fmt.Sprintf("ai_%d", time.Now().UnixNano()),
-			Source: "ai",
-			Title:  line,
-			Status: "pending",
-			Effort: "M", // Default to medium effort
+		// Skip header lines
+		if strings.HasPrefix(line, "Here are") ||
+		   strings.HasPrefix(line, "Action items") ||
+		   strings.HasPrefix(line, "Tasks:") ||
+		   strings.HasPrefix(line, "#") {
+			continue
 		}
 
-		// Extract priority if mentioned
-		if strings.Contains(strings.ToLower(line), "high") {
-			task.Impact = 4
-			task.Urgency = 4
-		} else if strings.Contains(strings.ToLower(line), "medium") {
-			task.Impact = 3
-			task.Urgency = 3
-		} else {
-			task.Impact = 2
-			task.Urgency = 2
+		// Remove markdown formatting
+		line = strings.ReplaceAll(line, "**", "")  // Remove bold
+
+		// Check if this is a new task (starts with number)
+		isNewTask := regexp.MustCompile(`^\d+\.`).MatchString(line)
+
+		if isNewTask {
+			// Save previous task if exists
+			if currentTask != nil && currentTask.Title != "" {
+				tasks = append(tasks, currentTask)
+			}
+
+			// Start new task
+			currentTask = &db.Task{
+				ID:     fmt.Sprintf("ai_%d", time.Now().UnixNano()),
+				Source: "ai",
+				Status: "pending",
+				Impact: 2,
+				Urgency: 2,
+				Effort: "M",
+			}
+
+			// Remove numbered prefix
+			line = regexp.MustCompile(`^\d+\.\s+`).ReplaceAllString(line, "")
 		}
 
-		// Extract due date if mentioned
-		if strings.Contains(strings.ToLower(line), "today") {
-			due := time.Now().Add(8 * time.Hour)
-			task.DueTS = &due
-			task.Urgency = 5
-		} else if strings.Contains(strings.ToLower(line), "tomorrow") {
-			due := time.Now().Add(24 * time.Hour)
-			task.DueTS = &due
-			task.Urgency = 4
+		// Remove bullet markers from continuation lines
+		line = regexp.MustCompile(`^[\*\-]\s+`).ReplaceAllString(line, "")
+
+		// Parse pipe-delimited format (single-line tasks)
+		if strings.Contains(line, "|") {
+			parts := strings.Split(line, "|")
+			for _, part := range parts {
+				g.parseTaskField(currentTask, part)
+			}
+			continue
 		}
 
-		tasks = append(tasks, task)
+		// Parse field: value format (multi-line tasks)
+		g.parseTaskField(currentTask, line)
+	}
+
+	// Add last task
+	if currentTask != nil && currentTask.Title != "" {
+		tasks = append(tasks, currentTask)
 	}
 
 	return tasks
+}
+
+// parseTaskField parses a single field from a task line
+func (g *GeminiClient) parseTaskField(task *db.Task, field string) {
+	if task == nil {
+		return
+	}
+
+	field = strings.TrimSpace(field)
+
+	if strings.HasPrefix(field, "Title:") {
+		task.Title = strings.TrimSpace(strings.TrimPrefix(field, "Title:"))
+	} else if strings.HasPrefix(field, "Owner:") {
+		task.Stakeholder = strings.TrimSpace(strings.TrimPrefix(field, "Owner:"))
+	} else if strings.HasPrefix(field, "Due:") {
+		dueStr := strings.TrimSpace(strings.TrimPrefix(field, "Due:"))
+		task.DueTS = parseDueDate(dueStr)
+		if task.DueTS != nil {
+			task.Urgency = maxInt(task.Urgency, calculateUrgencyFromDue(*task.DueTS))
+		}
+	} else if strings.HasPrefix(field, "Priority:") {
+		priorityStr := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(field, "Priority:")))
+		if strings.Contains(priorityStr, "high") {
+			task.Impact = 4
+			task.Urgency = maxInt(task.Urgency, 4)
+		} else if strings.Contains(priorityStr, "medium") {
+			task.Impact = 3
+			task.Urgency = maxInt(task.Urgency, 3)
+		} else {
+			task.Impact = 2
+		}
+	} else if task.Title == "" && len(field) > 10 {
+		// If no title yet and this is a substantial line, use it as the title
+		task.Title = field
+	}
+}
+
+// parseDueDate parses due date strings like "Today", "Tomorrow", "Friday", etc.
+func parseDueDate(dueStr string) *time.Time {
+	dueStr = strings.ToLower(strings.TrimSpace(dueStr))
+
+	if dueStr == "" || dueStr == "n/a" || dueStr == "none" {
+		return nil
+	}
+
+	now := time.Now()
+
+	if dueStr == "today" {
+		due := now.Add(8 * time.Hour)
+		return &due
+	} else if dueStr == "tomorrow" {
+		due := now.Add(24 * time.Hour)
+		return &due
+	} else if dueStr == "this week" || dueStr == "week" {
+		due := now.Add(72 * time.Hour)
+		return &due
+	}
+
+	// Try to parse weekday names (e.g., "Friday")
+	weekdays := map[string]int{
+		"sunday": 0, "monday": 1, "tuesday": 2, "wednesday": 3,
+		"thursday": 4, "friday": 5, "saturday": 6,
+	}
+
+	if weekdayNum, ok := weekdays[dueStr]; ok {
+		currentWeekday := int(now.Weekday())
+		daysUntil := (weekdayNum - currentWeekday + 7) % 7
+		if daysUntil == 0 {
+			daysUntil = 7 // Next occurrence
+		}
+		due := now.Add(time.Duration(daysUntil) * 24 * time.Hour)
+		return &due
+	}
+
+	return nil
+}
+
+// calculateUrgencyFromDue calculates urgency score based on due date
+func calculateUrgencyFromDue(dueDate time.Time) int {
+	hoursUntil := time.Until(dueDate).Hours()
+
+	switch {
+	case hoursUntil <= 0:
+		return 5 // Overdue
+	case hoursUntil <= 24:
+		return 5 // Today
+	case hoursUntil <= 72:
+		return 4 // Next 3 days
+	case hoursUntil <= 168:
+		return 3 // Next week
+	default:
+		return 2
+	}
+}
+
+// maxInt returns the maximum of two integers
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // extractText extracts text from Gemini response
