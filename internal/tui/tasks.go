@@ -391,7 +391,7 @@ func (m *TasksModel) renderTaskDetail() string {
 
 	// Source with clickable link
 	sourceText := fmt.Sprintf("Source: %s", task.Source)
-	b.WriteString(infoStyle.Render(sourceText))
+	b.WriteString(infoStyle.Render(sourceText) + "\n")
 
 	if task.SourceID != "" {
 		var linkURL string
@@ -413,12 +413,12 @@ func (m *TasksModel) renderTaskDetail() string {
 		if linkURL != "" {
 			linkStyle := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("39")).
-				Underline(true)
+				Underline(true).
+				Padding(0, 2)
 			hyperlink := makeHyperlink(linkURL, linkText)
-			b.WriteString(" " + linkStyle.Render(hyperlink))
+			b.WriteString(linkStyle.Render(hyperlink) + "\n")
 		}
 	}
-	b.WriteString("\n")
 
 	// Stakeholder
 	if task.Stakeholder != "" {
