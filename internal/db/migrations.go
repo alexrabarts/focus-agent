@@ -138,6 +138,26 @@ func GetMigrations() []Migration {
 				return err
 			},
 		},
+		{
+			Version: 3,
+			Name:    "add_matched_priorities_to_tasks",
+			Up: func(tx *sql.Tx) error {
+				// Add matched_priorities column to tasks table to store which priority areas matched
+				_, err := tx.Exec(`
+					ALTER TABLE tasks ADD COLUMN matched_priorities TEXT DEFAULT NULL;
+				`)
+				if err != nil {
+					return fmt.Errorf("failed to add matched_priorities column: %w", err)
+				}
+
+				return nil
+			},
+			Down: func(tx *sql.Tx) error {
+				// Note: SQLite doesn't support DROP COLUMN easily
+				// For compatibility, we'll leave the column
+				return nil
+			},
+		},
 		// Add future migrations here
 	}
 }

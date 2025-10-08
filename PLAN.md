@@ -44,6 +44,33 @@ Sync AI-generated tasks with Google Tasks for better cross-platform task managem
 
 ## Ideas / Backlog
 
+### Granola Meeting Transcription Integration
+Integrate with Granola (or similar meeting transcription tools) and Gemini to automatically extract tasks from meeting summaries.
+
+**Problem:** Meeting notes and action items from Granola transcriptions need to be manually added to task lists.
+
+**Solution:**
+- Monitor for new Granola meeting summaries (via API, file watching, or email notifications)
+- Parse AI-generated meeting summaries that include action items
+- Extract tasks with assignees, deadlines, and context
+- Automatically create tasks in Focus Agent
+- Link tasks back to meeting transcript/summary for context
+- Detect user's name variations to filter only user's tasks
+
+**Benefits:**
+- Zero friction capture of meeting action items
+- Tasks automatically prioritized based on strategic alignment
+- Full context from meeting transcript always available
+- No manual data entry needed
+- Works with Granola, Gemini, or other AI meeting tools
+
+**Technical Approach:**
+1. Add integration options: API webhook, email parsing, or file watching
+2. Parse action items from AI summaries (similar to email thread parsing)
+3. Map meeting attendees to stakeholders
+4. Extract due dates from "by Friday" or similar phrases
+5. Link to source meeting (calendar event ID or transcript URL)
+
 ### Email Auto-Reply Suggestions
 Proactively suggest replies for common email patterns (meeting confirms, simple questions, etc.)
 

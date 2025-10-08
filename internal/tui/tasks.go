@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -488,6 +489,53 @@ func (m *TasksModel) renderTaskDetail() string {
 	b.WriteString(scoreStyle.Render(fmt.Sprintf("└─ Stakeholder: %s (%.1f, weight: 0.15) → +%.2f", stakeholderLabel, stakeholderWeight, stakeholderContribution)) + "\n")
 	b.WriteString(scoreStyle.Render("──────────────────────────────────────────") + "\n")
 	b.WriteString(scoreStyle.Render(fmt.Sprintf("Total Score: %.2f/5", task.Score)) + "\n")
+
+	// Strategic Alignment Matches section
+	if task.MatchedPriorities != "" && task.MatchedPriorities != "{}" && task.MatchedPriorities != "null" {
+		var matches db.PriorityMatches
+		if err := json.Unmarshal([]byte(task.MatchedPriorities), &matches); err == nil {
+			hasMatches := len(matches.OKRs) > 0 || len(matches.FocusAreas) > 0 || len(matches.Projects) > 0 || matches.KeyStakeholder
+
+			if hasMatches {
+				b.WriteString("\n")
+				alignmentTitleStyle := lipgloss.NewStyle().
+					Bold(true).
+					Foreground(lipgloss.Color("11")).
+					Padding(0, 1)
+
+				b.WriteString(alignmentTitleStyle.Render("📊 Strategic Alignment:") + "\n")
+
+				alignmentStyle := lipgloss.NewStyle().
+					Foreground(lipgloss.Color("250")).
+					Padding(0, 2)
+
+				if len(matches.OKRs) > 0 {
+					b.WriteString(alignmentStyle.Render("OKRs:") + "\n")
+					for _, okr := range matches.OKRs {
+						b.WriteString(alignmentStyle.Render(fmt.Sprintf("  • %s", okr)) + "\n")
+					}
+				}
+
+				if len(matches.FocusAreas) > 0 {
+					b.WriteString(alignmentStyle.Render("Focus Areas:") + "\n")
+					for _, area := range matches.FocusAreas {
+						b.WriteString(alignmentStyle.Render(fmt.Sprintf("  • %s", area)) + "\n")
+					}
+				}
+
+				if len(matches.Projects) > 0 {
+					b.WriteString(alignmentStyle.Render("Projects:") + "\n")
+					for _, project := range matches.Projects {
+						b.WriteString(alignmentStyle.Render(fmt.Sprintf("  • %s", project)) + "\n")
+					}
+				}
+
+				if matches.KeyStakeholder {
+					b.WriteString(alignmentStyle.Render("✓ From Key Stakeholder") + "\n")
+				}
+			}
+		}
+	}
 
 	// Source Context section (for AI tasks)
 	if task.Source == "ai" && task.SourceID != "" {

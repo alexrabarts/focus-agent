@@ -2,6 +2,7 @@ package planner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -71,15 +72,25 @@ func (p *Planner) PrioritizeTasks(ctx context.Context) error {
 			task.Urgency = p.calculateUrgencyFromDue(t)
 		}
 
-		// Calculate score
+		// Calculate score and get matched priorities
 		task.Score = p.calculateScore(task)
+
+		// Get matched priorities
+		_, matches := p.calculateStrategicAlignmentWithMatches(task)
+		matchesJSON, err := json.Marshal(matches)
+		if err != nil {
+			log.Printf("Failed to marshal matched priorities: %v", err)
+			matchesJSON = []byte("{}")
+		}
+		task.MatchedPriorities = string(matchesJSON)
+
 		tasks = append(tasks, task)
 	}
 
-	// Update scores in database
+	// Update scores and matched priorities in database
 	for _, task := range tasks {
-		updateQuery := `UPDATE tasks SET score = ?, urgency = ? WHERE id = ?`
-		if _, err := p.db.Exec(updateQuery, task.Score, task.Urgency, task.ID); err != nil {
+		updateQuery := `UPDATE tasks SET score = ?, urgency = ?, matched_priorities = ? WHERE id = ?`
+		if _, err := p.db.Exec(updateQuery, task.Score, task.Urgency, task.MatchedPriorities, task.ID); err != nil {
 			log.Printf("Failed to update task score: %v", err)
 		}
 	}
@@ -141,61 +152,76 @@ func (p *Planner) calculateScore(task *db.Task) float64 {
 
 // calculateStrategicAlignment scores how well a task aligns with strategic priorities
 func (p *Planner) calculateStrategicAlignment(task *db.Task) float64 {
+	score, _ := p.calculateStrategicAlignmentWithMatches(task)
+	return score
+}
+
+// calculateStrategicAlignmentWithMatches scores alignment and returns which priorities matched
+func (p *Planner) calculateStrategicAlignmentWithMatches(task *db.Task) (float64, *db.PriorityMatches) {
 	score := 0.0
 	maxScore := 5.0
+	matches := &db.PriorityMatches{
+		OKRs:       []string{},
+		FocusAreas: []string{},
+		Projects:   []string{},
+	}
 
 	// Combine title and description for matching
 	content := strings.ToLower(task.Title + " " + task.Description)
 
 	// Check against OKRs (highest weight)
-	okrMatches := 0
+	okrMatchCount := 0
 	for _, okr := range p.config.Priorities.OKRs {
 		keywords := extractKeywords(okr)
 		for _, keyword := range keywords {
 			if strings.Contains(content, strings.ToLower(keyword)) {
-				okrMatches++
+				matches.OKRs = append(matches.OKRs, okr)
+				okrMatchCount++
 				break // Only count once per OKR
 			}
 		}
 	}
 	if len(p.config.Priorities.OKRs) > 0 {
-		score += (float64(okrMatches) / float64(len(p.config.Priorities.OKRs))) * 2.0 // Max 2.0
+		score += (float64(okrMatchCount) / float64(len(p.config.Priorities.OKRs))) * 2.0 // Max 2.0
 	}
 
 	// Check against focus areas
-	focusMatches := 0
+	focusMatchCount := 0
 	for _, area := range p.config.Priorities.FocusAreas {
 		keywords := extractKeywords(area)
 		for _, keyword := range keywords {
 			if strings.Contains(content, strings.ToLower(keyword)) {
-				focusMatches++
+				matches.FocusAreas = append(matches.FocusAreas, area)
+				focusMatchCount++
 				break
 			}
 		}
 	}
 	if len(p.config.Priorities.FocusAreas) > 0 {
-		score += (float64(focusMatches) / float64(len(p.config.Priorities.FocusAreas))) * 1.5 // Max 1.5
+		score += (float64(focusMatchCount) / float64(len(p.config.Priorities.FocusAreas))) * 1.5 // Max 1.5
 	}
 
 	// Check against key projects
-	projectMatches := 0
+	projectMatchCount := 0
 	for _, project := range p.config.Priorities.KeyProjects {
 		keywords := extractKeywords(project)
 		for _, keyword := range keywords {
 			if strings.Contains(content, strings.ToLower(keyword)) || strings.ToLower(task.Project) == strings.ToLower(project) {
-				projectMatches++
+				matches.Projects = append(matches.Projects, project)
+				projectMatchCount++
 				break
 			}
 		}
 	}
 	if len(p.config.Priorities.KeyProjects) > 0 {
-		score += (float64(projectMatches) / float64(len(p.config.Priorities.KeyProjects))) * 1.0 // Max 1.0
+		score += (float64(projectMatchCount) / float64(len(p.config.Priorities.KeyProjects))) * 1.0 // Max 1.0
 	}
 
 	// Check if task source is from key stakeholders
 	for _, stakeholder := range p.config.Priorities.KeyStakeholders {
 		// This will be matched against email sources later
 		if task.SourceID != "" && strings.Contains(strings.ToLower(task.SourceID), strings.ToLower(stakeholder)) {
+			matches.KeyStakeholder = true
 			score += 0.5 // Bonus for key stakeholder
 			break
 		}
@@ -206,7 +232,7 @@ func (p *Planner) calculateStrategicAlignment(task *db.Task) float64 {
 		score = maxScore
 	}
 
-	return score
+	return score, matches
 }
 
 // extractKeywords extracts meaningful keywords from a phrase

@@ -41,23 +41,32 @@ type Thread struct {
 
 // Task represents a work item
 type Task struct {
-	ID          string     `json:"id"`
-	Source      string     `json:"source"`
-	SourceID    string     `json:"source_id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	DueTS       *time.Time `json:"due_ts"`
-	Project     string     `json:"project"`
-	Impact      int        `json:"impact"`
-	Urgency     int        `json:"urgency"`
-	Effort      string     `json:"effort"`
-	Stakeholder string     `json:"stakeholder"`
-	Score       float64    `json:"score"`
-	Status      string     `json:"status"`
-	Metadata    string     `json:"metadata"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	CompletedAt *time.Time `json:"completed_at"`
+	ID                 string     `json:"id"`
+	Source             string     `json:"source"`
+	SourceID           string     `json:"source_id"`
+	Title              string     `json:"title"`
+	Description        string     `json:"description"`
+	DueTS              *time.Time `json:"due_ts"`
+	Project            string     `json:"project"`
+	Impact             int        `json:"impact"`
+	Urgency            int        `json:"urgency"`
+	Effort             string     `json:"effort"`
+	Stakeholder        string     `json:"stakeholder"`
+	Score              float64    `json:"score"`
+	Status             string     `json:"status"`
+	Metadata           string     `json:"metadata"`
+	MatchedPriorities  string     `json:"matched_priorities"` // JSON string storing which priorities matched
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	CompletedAt        *time.Time `json:"completed_at"`
+}
+
+// PriorityMatches represents which priority areas matched for a task
+type PriorityMatches struct {
+	OKRs           []string `json:"okrs"`
+	FocusAreas     []string `json:"focus_areas"`
+	Projects       []string `json:"projects"`
+	KeyStakeholder bool     `json:"key_stakeholder"`
 }
 
 // Document represents a Drive document
