@@ -218,8 +218,7 @@ func (db *DB) SaveTask(task *Task) error {
 	return err
 }
 
-// GetPendingTasks returns tasks sorted by score
-// Only returns strategic/urgent tasks (score >= 2.5) to focus on what matters
+// GetPendingTasks returns all pending tasks sorted by score (highest first)
 func (db *DB) GetPendingTasks(limit int) ([]*Task, error) {
 	query := `
 		SELECT id, source, source_id, title, description, due_ts, project,
@@ -227,7 +226,6 @@ func (db *DB) GetPendingTasks(limit int) ([]*Task, error) {
 		       created_at, updated_at, completed_at
 		FROM tasks
 		WHERE status = 'pending'
-		AND score >= 2.5
 		ORDER BY score DESC
 		LIMIT ?
 	`
