@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
@@ -535,19 +534,14 @@ func (m PrioritiesModel) saveConfig() error {
 	if m.planner != nil {
 		go func() {
 			ctx := context.Background()
-			log.Println("Background: Recalculating task priorities with updated strategic priorities...")
+			// Recalculate task priorities with updated strategic priorities
 			if err := m.planner.PrioritizeTasks(ctx); err != nil {
-				log.Printf("Background priority recalculation failed: %v", err)
+				// Silently fail - will retry on next scheduled run
 				return
 			}
-			log.Println("Background: Task priorities recalculated successfully")
 
 			// Recalculate thread priorities based on updated task scores
-			if err := m.planner.RecalculateThreadPriorities(ctx); err != nil {
-				log.Printf("Background thread priority recalculation failed: %v", err)
-				return
-			}
-			log.Println("Background: Thread priorities recalculated successfully")
+			_ = m.planner.RecalculateThreadPriorities(ctx)
 		}()
 	}
 
