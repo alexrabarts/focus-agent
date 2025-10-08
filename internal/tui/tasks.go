@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/alexrabarts/focus-agent/internal/db"
 	"github.com/alexrabarts/focus-agent/internal/planner"
 )
@@ -389,10 +389,34 @@ func (m *TasksModel) renderTaskDetail() string {
 
 	b.WriteString(infoTitleStyle.Render("📋 Task Information:") + "\n")
 
-	// Source
-	b.WriteString(infoStyle.Render(fmt.Sprintf("Source: %s", task.Source)))
+	// Source with clickable link
+	sourceText := fmt.Sprintf("Source: %s", task.Source)
+	b.WriteString(infoStyle.Render(sourceText))
+
 	if task.SourceID != "" {
-		b.WriteString(fmt.Sprintf(" (ID: %s)", task.SourceID))
+		var linkURL string
+		var linkText string
+
+		switch task.Source {
+		case "gmail":
+			linkURL = fmt.Sprintf("https://mail.google.com/mail/u/0/#inbox/%s", task.SourceID)
+			linkText = "🔗 View email"
+		case "google_calendar":
+			linkURL = fmt.Sprintf("https://calendar.google.com/calendar/r/eventedit/%s", task.SourceID)
+			linkText = "🔗 View event"
+		case "google_tasks":
+			// Google Tasks doesn't have a direct deep link to individual tasks
+			linkURL = "https://tasks.google.com"
+			linkText = "🔗 View in Google Tasks"
+		}
+
+		if linkURL != "" {
+			linkStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("39")).
+				Underline(true)
+			hyperlink := makeHyperlink(linkURL, linkText)
+			b.WriteString(" " + linkStyle.Render(hyperlink))
+		}
 	}
 	b.WriteString("\n")
 

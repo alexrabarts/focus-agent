@@ -7,7 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/alexrabarts/focus-agent/internal/config"
 	"github.com/alexrabarts/focus-agent/internal/db"
 	"github.com/alexrabarts/focus-agent/internal/google"

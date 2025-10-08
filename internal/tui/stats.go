@@ -5,8 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/alexrabarts/focus-agent/internal/db"
 )
 
@@ -16,6 +17,8 @@ type StatsModel struct {
 	stats     Stats
 	loading   bool
 	err       error
+	viewport  viewport.Model
+	ready     bool
 }
 
 type Stats struct {
@@ -44,7 +47,15 @@ func NewStatsModel(database *db.DB, apiClient *APIClient) StatsModel {
 		database:  database,
 		apiClient: apiClient,
 		loading:   true,
+		viewport:  viewport.New(80, 20),
 	}
+}
+
+// SetSize updates the viewport dimensions
+func (m *StatsModel) SetSize(width, height int) {
+	m.viewport.Width = width
+	m.viewport.Height = height
+	m.ready = true
 }
 
 func (m StatsModel) fetchStats() tea.Cmd {
@@ -104,6 +115,9 @@ func (m StatsModel) fetchStats() tea.Cmd {
 }
 
 func (m StatsModel) Update(msg tea.Msg) (StatsModel, tea.Cmd) {
+	var vpCmd tea.Cmd
+	m.viewport, vpCmd = m.viewport.Update(msg)
+
 	switch msg := msg.(type) {
 	case statsLoadedMsg:
 		m.loading = false
@@ -119,10 +133,14 @@ func (m StatsModel) Update(msg tea.Msg) (StatsModel, tea.Cmd) {
 		}
 	}
 
-	return m, nil
+	return m, vpCmd
 }
 
 func (m StatsModel) View() string {
+	if !m.ready {
+		return "Initializing..."
+	}
+
 	if m.loading {
 		return "Loading..."
 	}
@@ -193,7 +211,9 @@ func (m StatsModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("r: refresh"))
 
-	return b.String()
+	content := b.String()
+	m.viewport.SetContent(content)
+	return m.viewport.View()
 }
 
 func (m StatsModel) formatTime(t *time.Time) string {

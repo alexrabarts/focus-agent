@@ -5,8 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/alexrabarts/focus-agent/internal/db"
 )
 
@@ -21,6 +22,8 @@ type ThreadsModel struct {
 	err            error
 	selectedThread *db.Thread // Currently selected thread for detail view
 	detailScroll   int        // Scroll position in detail view
+	viewport       viewport.Model
+	ready          bool
 }
 
 type threadsLoadedMsg struct {
@@ -34,7 +37,15 @@ func NewThreadsModel(database *db.DB, apiClient *APIClient) ThreadsModel {
 		apiClient: apiClient,
 		messages:  make(map[string][]*db.Message),
 		loading:   true,
+		viewport:  viewport.New(80, 20),
 	}
+}
+
+// SetSize updates the viewport dimensions
+func (m *ThreadsModel) SetSize(width, height int) {
+	m.viewport.Width = width
+	m.viewport.Height = height
+	m.ready = true
 }
 
 func (m ThreadsModel) fetchThreads() tea.Cmd {
@@ -55,6 +66,9 @@ func (m ThreadsModel) fetchThreads() tea.Cmd {
 }
 
 func (m ThreadsModel) Update(msg tea.Msg) (ThreadsModel, tea.Cmd) {
+	var vpCmd tea.Cmd
+	m.viewport, vpCmd = m.viewport.Update(msg)
+
 	switch msg := msg.(type) {
 	case threadsLoadedMsg:
 		m.loading = false
@@ -112,10 +126,14 @@ func (m ThreadsModel) Update(msg tea.Msg) (ThreadsModel, tea.Cmd) {
 		}
 	}
 
-	return m, nil
+	return m, vpCmd
 }
 
 func (m ThreadsModel) View() string {
+	if !m.ready {
+		return "Initializing..."
+	}
+
 	if m.loading {
 		return "Loading threads..."
 	}
@@ -129,7 +147,9 @@ func (m ThreadsModel) View() string {
 
 	// If in detail view, show thread detail
 	if m.selectedThread != nil {
-		return m.renderThreadDetail()
+		content := m.renderThreadDetail()
+		m.viewport.SetContent(content)
+		return m.viewport.View()
 	}
 
 	if len(m.threads) == 0 {
@@ -176,7 +196,9 @@ func (m ThreadsModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("↑/↓: navigate | enter: view details | r: refresh"))
 
-	return b.String()
+	content := b.String()
+	m.viewport.SetContent(content)
+	return m.viewport.View()
 }
 
 func (m ThreadsModel) renderThread(thread *db.Thread, selected bool) string {
@@ -299,7 +321,15 @@ func (m ThreadsModel) renderThreadDetail() string {
 	if len(messages) > 0 {
 		subject = messages[0].Subject
 	}
-	b.WriteString(headerStyle.Render(fmt.Sprintf("📧 %s", subject)) + "\n\n")
+	b.WriteString(headerStyle.Render(fmt.Sprintf("📧 %s", subject)) + "\n")
+
+	// Add clickable Gmail link
+	gmailURL := fmt.Sprintf("https://mail.google.com/mail/u/0/#inbox/%s", m.selectedThread.ID)
+	linkStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("39")).
+		Underline(true)
+	linkText := makeHyperlink(gmailURL, "🔗 View in Gmail")
+	b.WriteString("  " + linkStyle.Render(linkText) + "\n\n")
 
 	// AI Summary section
 	summaryTitleStyle := lipgloss.NewStyle().
