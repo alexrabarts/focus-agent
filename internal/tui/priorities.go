@@ -98,7 +98,7 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 					if err := m.saveConfig(); err != nil {
 						m.message = fmt.Sprintf("Error saving: %v", err)
 					} else {
-						m.message = "Priority added (recalculating in background...)"
+						m.message = "Priority added (reprioritising in background...)"
 					}
 				}
 				m.mode = normalMode
@@ -134,7 +134,7 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 					if err := m.saveConfig(); err != nil {
 						m.message = fmt.Sprintf("Error saving: %v", err)
 					} else {
-						m.message = "Priority updated (recalculating in background...)"
+						m.message = "Priority updated (reprioritising in background...)"
 					}
 				}
 				m.mode = normalMode
@@ -288,7 +288,7 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 				if err := m.saveConfig(); err != nil {
 					m.message = fmt.Sprintf("Error saving: %v", err)
 				} else {
-					m.message = "Priority deleted (recalculating in background...)"
+					m.message = "Priority deleted (reprioritising in background...)"
 				}
 				// Adjust cursor if needed
 				maxCursor := m.getSectionLength(m.currentSection) - 1
@@ -304,7 +304,7 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 				if err := m.saveConfig(); err != nil {
 					m.message = fmt.Sprintf("Error undoing: %v", err)
 				} else {
-					m.message = "Undone (recalculating in background...)"
+					m.message = "Undone (reprioritising in background...)"
 					m.previousPriorities = nil
 				}
 			}

@@ -83,7 +83,6 @@ func (p *Planner) PrioritizeTasks(ctx context.Context) error {
 			matchesJSON = []byte("{}")
 		}
 		task.MatchedPriorities = string(matchesJSON)
-		log.Printf("Task %s matched_priorities: %s", task.ID, task.MatchedPriorities)
 
 		tasks = append(tasks, task)
 	}

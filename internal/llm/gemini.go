@@ -455,7 +455,6 @@ func (g *GeminiClient) EvaluateStrategicAlignment(ctx context.Context, task *db.
 	hash := g.hashPrompt(prompt)
 	cached, err := g.db.GetCachedResponse(hash)
 	if err == nil && cached != nil {
-		log.Printf("Using cached strategic alignment for task %s", task.ID)
 		return g.parseStrategicAlignmentResponse(cached.Response), nil
 	}
 
