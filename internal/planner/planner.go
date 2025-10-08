@@ -76,13 +76,14 @@ func (p *Planner) PrioritizeTasks(ctx context.Context) error {
 		task.Score = p.calculateScore(task)
 
 		// Get matched priorities
-		_, matches := p.calculateStrategicAlignmentWithMatches(task)
+		_, matches := p.CalculateStrategicAlignmentWithMatches(task)
 		matchesJSON, err := json.Marshal(matches)
 		if err != nil {
 			log.Printf("Failed to marshal matched priorities: %v", err)
 			matchesJSON = []byte("{}")
 		}
 		task.MatchedPriorities = string(matchesJSON)
+		log.Printf("Task %s matched_priorities: %s", task.ID, task.MatchedPriorities)
 
 		tasks = append(tasks, task)
 	}
@@ -152,13 +153,13 @@ func (p *Planner) calculateScore(task *db.Task) float64 {
 
 // calculateStrategicAlignment scores how well a task aligns with strategic priorities
 func (p *Planner) calculateStrategicAlignment(task *db.Task) float64 {
-	score, _ := p.calculateStrategicAlignmentWithMatches(task)
+	score, _ := p.CalculateStrategicAlignmentWithMatches(task)
 	return score
 }
 
-// calculateStrategicAlignmentWithMatches scores alignment and returns which priorities matched
+// CalculateStrategicAlignmentWithMatches scores alignment and returns which priorities matched
 // Uses LLM for semantic understanding rather than keyword matching
-func (p *Planner) calculateStrategicAlignmentWithMatches(task *db.Task) (float64, *db.PriorityMatches) {
+func (p *Planner) CalculateStrategicAlignmentWithMatches(task *db.Task) (float64, *db.PriorityMatches) {
 	matches := &db.PriorityMatches{
 		OKRs:       []string{},
 		FocusAreas: []string{},

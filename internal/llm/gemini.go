@@ -469,6 +469,9 @@ func (g *GeminiClient) EvaluateStrategicAlignment(ctx context.Context, task *db.
 	jsonModel.SetTemperature(g.config.Gemini.Temperature)
 	jsonModel.SetTopK(40)
 	jsonModel.SetTopP(0.95)
+	if g.config.Gemini.MaxTokens > 0 {
+		jsonModel.SetMaxOutputTokens(int32(g.config.Gemini.MaxTokens))
+	}
 	jsonModel.SafetySettings = g.model.SafetySettings
 
 	// Configure JSON response
@@ -831,15 +834,27 @@ func (g *GeminiClient) buildStrategicAlignmentPrompt(task *db.Task, priorities *
 	}
 
 	prompt.WriteString("INSTRUCTIONS:\n")
-	prompt.WriteString("Evaluate the alignment between this task and the strategic priorities listed above.\n\n")
-	prompt.WriteString("Be strict - only include priorities that have meaningful semantic alignment, not just shared keywords.\n")
-	prompt.WriteString("For example, 'data team' does not align with 'Data lake' project unless the task is specifically about the data lake infrastructure.\n\n")
+	prompt.WriteString("Evaluate the DIRECT, MEANINGFUL alignment between this task and the strategic priorities.\n\n")
+	prompt.WriteString("STRICT MATCHING RULES:\n")
+	prompt.WriteString("1. Only match if the task DIRECTLY advances or relates to the priority\n")
+	prompt.WriteString("2. Shared keywords alone are NOT sufficient (e.g., 'data team' ≠ 'Data lake project')\n")
+	prompt.WriteString("3. Generic administrative tasks (scheduling, coordinating, reporting) should NOT match strategic priorities unless they're specifically about implementing/advancing that priority\n")
+	prompt.WriteString("4. Be conservative - when in doubt, DON'T match\n\n")
+	prompt.WriteString("EXAMPLES OF POOR MATCHES TO AVOID:\n")
+	prompt.WriteString("- 'Schedule meeting about X' does NOT align with X unless the meeting is to implement/advance X\n")
+	prompt.WriteString("- 'Send report to team' does NOT align with 'Improved forecasting' just because both involve data\n")
+	prompt.WriteString("- 'Coordinate with data team' does NOT align with 'Data lake' unless specifically about the data lake\n")
+	prompt.WriteString("- 'Review budget' does NOT align with 'Profitability' unless it's specifically about improving margins\n\n")
+	prompt.WriteString("EXAMPLES OF GOOD MATCHES:\n")
+	prompt.WriteString("- 'Implement new CRM dashboard' → 'Scalable systems - CRM implementation'\n")
+	prompt.WriteString("- 'Analyze margin trends for cost optimization' → 'Sector Leading Profitability'\n")
+	prompt.WriteString("- 'Design brand guidelines for member experience' → 'Known for distinctive service'\n\n")
 	prompt.WriteString("Return:\n")
 	prompt.WriteString("- score: 0.0 (no alignment) to 5.0 (perfect alignment)\n")
-	prompt.WriteString("- okrs: array of OKR names that genuinely align (or empty array)\n")
-	prompt.WriteString("- focus_areas: array of Focus Area names that align (or empty array)\n")
-	prompt.WriteString("- projects: array of Project names that align (or empty array)\n")
-	prompt.WriteString("- reasoning: brief explanation of your evaluation\n")
+	prompt.WriteString("- okrs: array of OKR names that genuinely align (empty array if none)\n")
+	prompt.WriteString("- focus_areas: array of Focus Area names that align (empty array if none)\n")
+	prompt.WriteString("- projects: array of Project names that align (empty array if none)\n")
+	prompt.WriteString("- reasoning: brief explanation of your evaluation (include why you excluded matches if any)\n")
 
 	return prompt.String()
 }
