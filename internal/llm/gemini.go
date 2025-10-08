@@ -437,6 +437,116 @@ func (g *GeminiClient) ExtractTasks(ctx context.Context, content string) ([]*db.
 	return g.filterTasksForUser(g.parseTasksFromResponse(text)), nil
 }
 
+// StrategicAlignmentResult contains the result of strategic alignment evaluation
+type StrategicAlignmentResult struct {
+	Score          float64  `json:"score"`
+	OKRs           []string `json:"okrs"`
+	FocusAreas     []string `json:"focus_areas"`
+	Projects       []string `json:"projects"`
+	KeyStakeholder bool     `json:"key_stakeholder"`
+	Reasoning      string   `json:"reasoning"`
+}
+
+// EvaluateStrategicAlignment uses LLM to determine which strategic priorities align with a task
+func (g *GeminiClient) EvaluateStrategicAlignment(ctx context.Context, task *db.Task, priorities *config.Priorities) (*StrategicAlignmentResult, error) {
+	prompt := g.buildStrategicAlignmentPrompt(task, priorities)
+
+	// Check cache
+	hash := g.hashPrompt(prompt)
+	cached, err := g.db.GetCachedResponse(hash)
+	if err == nil && cached != nil {
+		log.Printf("Using cached strategic alignment for task %s", task.ID)
+		return g.parseStrategicAlignmentResponse(cached.Response), nil
+	}
+
+	// Wait for rate limit
+	if err := g.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter error: %w", err)
+	}
+
+	// Create a temporary model with JSON response mode
+	jsonModel := g.client.GenerativeModel(g.config.Gemini.Model)
+	jsonModel.SetTemperature(g.config.Gemini.Temperature)
+	jsonModel.SetTopK(40)
+	jsonModel.SetTopP(0.95)
+	jsonModel.SafetySettings = g.model.SafetySettings
+
+	// Configure JSON response
+	jsonModel.ResponseMIMEType = "application/json"
+	jsonModel.ResponseSchema = &genai.Schema{
+		Type: genai.TypeObject,
+		Properties: map[string]*genai.Schema{
+			"score": {
+				Type:        genai.TypeNumber,
+				Description: "Strategic alignment score from 0.0 to 5.0",
+			},
+			"okrs": {
+				Type:        genai.TypeArray,
+				Items:       &genai.Schema{Type: genai.TypeString},
+				Description: "OKR names that genuinely align",
+			},
+			"focus_areas": {
+				Type:        genai.TypeArray,
+				Items:       &genai.Schema{Type: genai.TypeString},
+				Description: "Focus area names that align",
+			},
+			"projects": {
+				Type:        genai.TypeArray,
+				Items:       &genai.Schema{Type: genai.TypeString},
+				Description: "Project names that align",
+			},
+			"reasoning": {
+				Type:        genai.TypeString,
+				Description: "Brief explanation of evaluation",
+			},
+		},
+		Required: []string{"score", "okrs", "focus_areas", "projects", "reasoning"},
+	}
+
+	// Generate response with retry
+	startTime := time.Now()
+	resp, err := g.generateWithRetryForModel(ctx, genai.Text(prompt), jsonModel)
+	if err != nil {
+		g.db.LogUsage("gemini", "strategic_alignment", 0, 0, time.Since(startTime), err)
+		return nil, fmt.Errorf("failed to evaluate strategic alignment: %w", err)
+	}
+
+	// Extract text
+	text := g.extractText(resp)
+
+	// Debug logging for empty responses
+	if text == "" {
+		log.Printf("Warning: Empty response from Gemini for strategic alignment")
+		if resp != nil && len(resp.Candidates) > 0 {
+			log.Printf("FinishReason: %v", resp.Candidates[0].FinishReason)
+			log.Printf("SafetyRatings: %v", resp.Candidates[0].SafetyRatings)
+			promptPreview := prompt
+			if len(promptPreview) > 200 {
+				promptPreview = prompt[:200] + "..."
+			}
+			log.Printf("Prompt was: %s", promptPreview)
+		}
+	}
+
+	// Calculate usage
+	tokens := g.estimateTokens(prompt + text)
+	cost := g.calculateCost(tokens)
+	g.db.LogUsage("gemini", "strategic_alignment", tokens, cost, time.Since(startTime), nil)
+
+	// Cache response (longer TTL since priorities don't change often)
+	cache := &db.LLMCache{
+		Hash:      hash,
+		Prompt:    prompt,
+		Response:  text,
+		Model:     g.config.Gemini.Model,
+		Tokens:    tokens,
+		ExpiresAt: time.Now().Add(7 * 24 * time.Hour), // 7 days
+	}
+	g.db.SaveCachedResponse(cache)
+
+	return g.parseStrategicAlignmentResponse(text), nil
+}
+
 // filterTasksForUser filters out tasks assigned to other specific people
 func (g *GeminiClient) filterTasksForUser(tasks []*db.Task) []*db.Task {
 	userEmail := strings.ToLower(g.config.Google.UserEmail)
@@ -676,6 +786,122 @@ func (g *GeminiClient) buildMeetingPrepPrompt(event *db.Event, docs []*db.Docume
 	prompt.WriteString("Meeting Brief:")
 
 	return prompt.String()
+}
+
+// buildStrategicAlignmentPrompt creates a prompt for strategic alignment evaluation
+func (g *GeminiClient) buildStrategicAlignmentPrompt(task *db.Task, priorities *config.Priorities) string {
+	var prompt strings.Builder
+
+	prompt.WriteString("Evaluate how well this task aligns with the following strategic priorities.\n\n")
+
+	prompt.WriteString("TASK:\n")
+	prompt.WriteString(fmt.Sprintf("Title: %s\n", task.Title))
+	if task.Description != "" {
+		prompt.WriteString(fmt.Sprintf("Description: %s\n", task.Description))
+	}
+	if task.Project != "" {
+		prompt.WriteString(fmt.Sprintf("Project: %s\n", task.Project))
+	}
+	prompt.WriteString("\n")
+
+	prompt.WriteString("STRATEGIC PRIORITIES:\n\n")
+
+	if len(priorities.OKRs) > 0 {
+		prompt.WriteString("OKRs (Objectives & Key Results):\n")
+		for _, okr := range priorities.OKRs {
+			prompt.WriteString(fmt.Sprintf("  - %s\n", okr))
+		}
+		prompt.WriteString("\n")
+	}
+
+	if len(priorities.FocusAreas) > 0 {
+		prompt.WriteString("Focus Areas:\n")
+		for _, area := range priorities.FocusAreas {
+			prompt.WriteString(fmt.Sprintf("  - %s\n", area))
+		}
+		prompt.WriteString("\n")
+	}
+
+	if len(priorities.KeyProjects) > 0 {
+		prompt.WriteString("Key Projects:\n")
+		for _, project := range priorities.KeyProjects {
+			prompt.WriteString(fmt.Sprintf("  - %s\n", project))
+		}
+		prompt.WriteString("\n")
+	}
+
+	prompt.WriteString("INSTRUCTIONS:\n")
+	prompt.WriteString("Evaluate the alignment between this task and the strategic priorities listed above.\n\n")
+	prompt.WriteString("Be strict - only include priorities that have meaningful semantic alignment, not just shared keywords.\n")
+	prompt.WriteString("For example, 'data team' does not align with 'Data lake' project unless the task is specifically about the data lake infrastructure.\n\n")
+	prompt.WriteString("Return:\n")
+	prompt.WriteString("- score: 0.0 (no alignment) to 5.0 (perfect alignment)\n")
+	prompt.WriteString("- okrs: array of OKR names that genuinely align (or empty array)\n")
+	prompt.WriteString("- focus_areas: array of Focus Area names that align (or empty array)\n")
+	prompt.WriteString("- projects: array of Project names that align (or empty array)\n")
+	prompt.WriteString("- reasoning: brief explanation of your evaluation\n")
+
+	return prompt.String()
+}
+
+// parseStrategicAlignmentResponse parses the LLM response for strategic alignment
+func (g *GeminiClient) parseStrategicAlignmentResponse(response string) *StrategicAlignmentResult {
+	// Find JSON object in response
+	response = strings.TrimSpace(response)
+
+	// Default result for empty or invalid responses
+	result := &StrategicAlignmentResult{
+		Score:      0.0,
+		OKRs:       []string{},
+		FocusAreas: []string{},
+		Projects:   []string{},
+	}
+
+	// Handle empty response
+	if response == "" {
+		log.Printf("Empty strategic alignment response from LLM")
+		return result
+	}
+
+	// Remove markdown code blocks if present
+	response = strings.TrimPrefix(response, "```json")
+	response = strings.TrimPrefix(response, "```")
+	response = strings.TrimSuffix(response, "```")
+	response = strings.TrimSpace(response)
+
+	// Try to extract JSON object if embedded in text
+	jsonStart := strings.Index(response, "{")
+	jsonEnd := strings.LastIndex(response, "}")
+	if jsonStart >= 0 && jsonEnd > jsonStart {
+		response = response[jsonStart : jsonEnd+1]
+	}
+
+	// Try to parse JSON
+	if err := json.Unmarshal([]byte(response), result); err != nil {
+		log.Printf("Failed to parse strategic alignment response: %v", err)
+		log.Printf("Response was: %s", response)
+		return result
+	}
+
+	// Ensure arrays are not nil
+	if result.OKRs == nil {
+		result.OKRs = []string{}
+	}
+	if result.FocusAreas == nil {
+		result.FocusAreas = []string{}
+	}
+	if result.Projects == nil {
+		result.Projects = []string{}
+	}
+
+	// Ensure score is in valid range
+	if result.Score < 0 {
+		result.Score = 0
+	} else if result.Score > 5 {
+		result.Score = 5
+	}
+
+	return result
 }
 
 // parseTasksFromResponse parses tasks from LLM response

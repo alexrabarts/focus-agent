@@ -157,105 +157,40 @@ func (p *Planner) calculateStrategicAlignment(task *db.Task) float64 {
 }
 
 // calculateStrategicAlignmentWithMatches scores alignment and returns which priorities matched
+// Uses LLM for semantic understanding rather than keyword matching
 func (p *Planner) calculateStrategicAlignmentWithMatches(task *db.Task) (float64, *db.PriorityMatches) {
-	score := 0.0
-	maxScore := 5.0
 	matches := &db.PriorityMatches{
 		OKRs:       []string{},
 		FocusAreas: []string{},
 		Projects:   []string{},
 	}
 
-	// Combine title and description for matching
-	content := strings.ToLower(task.Title + " " + task.Description)
-
-	// Check against OKRs (highest weight)
-	okrMatchCount := 0
-	for _, okr := range p.config.Priorities.OKRs {
-		keywords := extractKeywords(okr)
-		for _, keyword := range keywords {
-			if strings.Contains(content, strings.ToLower(keyword)) {
-				matches.OKRs = append(matches.OKRs, okr)
-				okrMatchCount++
-				break // Only count once per OKR
-			}
-		}
-	}
-	if len(p.config.Priorities.OKRs) > 0 {
-		score += (float64(okrMatchCount) / float64(len(p.config.Priorities.OKRs))) * 2.0 // Max 2.0
+	// Use LLM to evaluate strategic alignment
+	ctx := context.Background()
+	result, err := p.llm.EvaluateStrategicAlignment(ctx, task, &p.config.Priorities)
+	if err != nil {
+		log.Printf("Failed to evaluate strategic alignment for task %s: %v", task.ID, err)
+		// Fall back to zero score if LLM fails
+		return 0.0, matches
 	}
 
-	// Check against focus areas
-	focusMatchCount := 0
-	for _, area := range p.config.Priorities.FocusAreas {
-		keywords := extractKeywords(area)
-		for _, keyword := range keywords {
-			if strings.Contains(content, strings.ToLower(keyword)) {
-				matches.FocusAreas = append(matches.FocusAreas, area)
-				focusMatchCount++
+	// Convert LLM result to PriorityMatches
+	matches.OKRs = result.OKRs
+	matches.FocusAreas = result.FocusAreas
+	matches.Projects = result.Projects
+	matches.KeyStakeholder = result.KeyStakeholder
+
+	// Check if task source is from key stakeholders (keep this logic as it's not semantic)
+	if !matches.KeyStakeholder {
+		for _, stakeholder := range p.config.Priorities.KeyStakeholders {
+			if task.SourceID != "" && strings.Contains(strings.ToLower(task.SourceID), strings.ToLower(stakeholder)) {
+				matches.KeyStakeholder = true
 				break
 			}
 		}
 	}
-	if len(p.config.Priorities.FocusAreas) > 0 {
-		score += (float64(focusMatchCount) / float64(len(p.config.Priorities.FocusAreas))) * 1.5 // Max 1.5
-	}
 
-	// Check against key projects
-	projectMatchCount := 0
-	for _, project := range p.config.Priorities.KeyProjects {
-		keywords := extractKeywords(project)
-		for _, keyword := range keywords {
-			if strings.Contains(content, strings.ToLower(keyword)) || strings.ToLower(task.Project) == strings.ToLower(project) {
-				matches.Projects = append(matches.Projects, project)
-				projectMatchCount++
-				break
-			}
-		}
-	}
-	if len(p.config.Priorities.KeyProjects) > 0 {
-		score += (float64(projectMatchCount) / float64(len(p.config.Priorities.KeyProjects))) * 1.0 // Max 1.0
-	}
-
-	// Check if task source is from key stakeholders
-	for _, stakeholder := range p.config.Priorities.KeyStakeholders {
-		// This will be matched against email sources later
-		if task.SourceID != "" && strings.Contains(strings.ToLower(task.SourceID), strings.ToLower(stakeholder)) {
-			matches.KeyStakeholder = true
-			score += 0.5 // Bonus for key stakeholder
-			break
-		}
-	}
-
-	// Normalize to 0-5 scale
-	if score > maxScore {
-		score = maxScore
-	}
-
-	return score, matches
-}
-
-// extractKeywords extracts meaningful keywords from a phrase
-func extractKeywords(phrase string) []string {
-	// Remove common stop words and split
-	stopWords := map[string]bool{
-		"the": true, "a": true, "an": true, "and": true, "or": true,
-		"but": true, "in": true, "on": true, "at": true, "to": true,
-		"for": true, "of": true, "by": true, "with": true, "is": true,
-	}
-
-	words := strings.Fields(strings.ToLower(phrase))
-	keywords := []string{}
-
-	for _, word := range words {
-		// Remove punctuation
-		word = strings.Trim(word, ".,!?;:")
-		if len(word) > 2 && !stopWords[word] {
-			keywords = append(keywords, word)
-		}
-	}
-
-	return keywords
+	return result.Score, matches
 }
 
 // calculateUrgencyFromDue calculates urgency based on due date

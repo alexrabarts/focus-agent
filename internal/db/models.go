@@ -232,7 +232,7 @@ func (db *DB) GetPendingTasks(limit int) ([]*Task, error) {
 	query := `
 		SELECT id, source, source_id, title, description, due_ts, project,
 		       impact, urgency, effort, stakeholder, score, status, metadata,
-		       created_at, updated_at, completed_at
+		       matched_priorities, created_at, updated_at, completed_at
 		FROM tasks
 		WHERE status = 'pending'
 		ORDER BY score DESC
@@ -249,12 +249,13 @@ func (db *DB) GetPendingTasks(limit int) ([]*Task, error) {
 	for rows.Next() {
 		task := &Task{}
 		var dueTS, createdTS, updatedTS, completedTS sql.NullInt64
+		var matchedPriorities sql.NullString
 
 		err := rows.Scan(
 			&task.ID, &task.Source, &task.SourceID, &task.Title, &task.Description,
 			&dueTS, &task.Project, &task.Impact, &task.Urgency, &task.Effort,
 			&task.Stakeholder, &task.Score, &task.Status, &task.Metadata,
-			&createdTS, &updatedTS, &completedTS,
+			&matchedPriorities, &createdTS, &updatedTS, &completedTS,
 		)
 		if err != nil {
 			return nil, err
@@ -263,6 +264,9 @@ func (db *DB) GetPendingTasks(limit int) ([]*Task, error) {
 		if dueTS.Valid {
 			t := time.Unix(dueTS.Int64, 0)
 			task.DueTS = &t
+		}
+		if matchedPriorities.Valid {
+			task.MatchedPriorities = matchedPriorities.String
 		}
 		if createdTS.Valid {
 			task.CreatedAt = time.Unix(createdTS.Int64, 0)
