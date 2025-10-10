@@ -76,6 +76,14 @@ type MessageResponse struct {
 	Sensitivity string   `json:"sensitivity"`
 }
 
+// Queue item response structure
+type QueueItemResponse struct {
+	ThreadID  string `json:"thread_id"`
+	Subject   string `json:"subject"`
+	From      string `json:"from"`
+	Timestamp string `json:"timestamp"`
+}
+
 // GET /api/tasks - List pending tasks
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -350,4 +358,63 @@ func (s *Server) handleThreadMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, response)
+}
+
+// GET /api/queue - List threads waiting for AI processing
+func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// Query threads without summaries
+	query := `
+		SELECT DISTINCT t.id, m.subject, m.from_addr, m.ts
+		FROM threads t
+		JOIN messages m ON t.id = m.thread_id
+		WHERE t.summary IS NULL OR t.summary = ''
+		GROUP BY t.id
+		ORDER BY m.ts DESC
+		LIMIT 100
+	`
+
+	rows, err := s.database.Query(query)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+
+	response := make([]QueueItemResponse, 0)
+	for rows.Next() {
+		var item QueueItemResponse
+		var tsUnix int64
+		if scanErr := rows.Scan(&item.ThreadID, &item.Subject, &item.From, &tsUnix); scanErr != nil {
+			continue
+		}
+		item.Timestamp = time.Unix(tsUnix, 0).Format(time.RFC3339)
+		response = append(response, item)
+	}
+
+	writeJSON(w, http.StatusOK, response)
+}
+
+// POST /api/queue/process - Trigger AI processing of queue
+func (s *Server) handleQueueProcess(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// Trigger processing via scheduler
+	// This requires access to the scheduler, which we need to add to the Server
+	if s.scheduler == nil {
+		writeError(w, http.StatusServiceUnavailable, "Processing not available")
+		return
+	}
+
+	// Trigger processing in background
+	go s.scheduler.ProcessNewMessages()
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "processing started"})
 }

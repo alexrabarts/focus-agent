@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -109,16 +110,20 @@ func getToken(ctx context.Context, config *oauth2.Config, tokenFile string) (*oa
 	}
 
 	// Need to run OAuth flow
+	log.Printf("Starting OAuth flow...")
 	token, err = getTokenFromWeb(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get token from web: %w", err)
 	}
 
+	log.Printf("Token received, saving to %s", tokenFile)
 	// Save token
 	if err := saveToken(tokenFile, token); err != nil {
-		log.Printf("Warning: failed to save token: %v", err)
+		log.Printf("ERROR: failed to save token: %v", err)
+		return nil, fmt.Errorf("failed to save token: %w", err)
 	}
 
+	log.Printf("Token saved successfully!")
 	return token, nil
 }
 
@@ -165,13 +170,15 @@ func getTokenFromWeb(config *oauth2.Config) (*oauth2.Token, error) {
 
 	// Callback handler
 	callbackHandler := func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("Callback received: %s", r.URL.String())
 		code := r.URL.Query().Get("code")
 		if code == "" {
-			errCh <- fmt.Errorf("no code in callback")
+			log.Printf("No authorization code in callback (likely browser request). URL: %s", r.URL.String())
 			fmt.Fprintf(w, "Error: No authorization code received")
 			return
 		}
 
+		log.Printf("Authorization code received, length: %d", len(code))
 		codeCh <- code
 		fmt.Fprintf(w, `
 			<html>
@@ -192,10 +199,14 @@ func getTokenFromWeb(config *oauth2.Config) (*oauth2.Token, error) {
 	// Start server in goroutine
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errCh <- err
+			log.Printf("Server error: %v", err)
 		}
 	}()
-	defer server.Shutdown(context.Background())
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		server.Shutdown(ctx)
+	}()
 
 	// Generate auth URL
 	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
@@ -205,17 +216,21 @@ func getTokenFromWeb(config *oauth2.Config) (*oauth2.Token, error) {
 	var code string
 	select {
 	case code = <-codeCh:
-		// Success
+		log.Printf("Code received from channel, exchanging for token...")
 	case err := <-errCh:
+		log.Printf("Error from channel: %v", err)
 		return nil, err
 	}
 
 	// Exchange code for token
+	log.Printf("Exchanging authorization code for access token...")
 	token, err := config.Exchange(context.Background(), code)
 	if err != nil {
+		log.Printf("ERROR: Token exchange failed: %v", err)
 		return nil, fmt.Errorf("unable to retrieve token from web: %w", err)
 	}
 
+	log.Printf("Token exchange successful!")
 	return token, nil
 }
 

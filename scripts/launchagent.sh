@@ -5,7 +5,7 @@
 set -e
 
 AGENT_NAME="focus-agent"
-PLIST_NAME="com.alexrabarts.focus-agent"
+PLIST_NAME="com.rabarts.focus-agent"
 BINARY_PATH="/usr/local/bin/focus-agent"
 CONFIG_PATH="$HOME/.focus-agent/config.yaml"
 LOG_DIR="$HOME/.focus-agent/log"

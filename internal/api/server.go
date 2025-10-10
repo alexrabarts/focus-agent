@@ -16,13 +16,19 @@ import (
 	"github.com/alexrabarts/focus-agent/internal/planner"
 )
 
+// Scheduler interface to avoid circular dependency
+type Scheduler interface {
+	ProcessNewMessages()
+}
+
 type Server struct {
-	database *db.DB
-	clients  *google.Clients
-	llm      *llm.GeminiClient
-	planner  *planner.Planner
-	config   *config.Config
-	server   *http.Server
+	database  *db.DB
+	clients   *google.Clients
+	llm       *llm.GeminiClient
+	planner   *planner.Planner
+	scheduler Scheduler
+	config    *config.Config
+	server    *http.Server
 }
 
 func NewServer(database *db.DB, clients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config) *Server {
@@ -33,6 +39,11 @@ func NewServer(database *db.DB, clients *google.Clients, llmClient *llm.GeminiCl
 		planner:  plannerService,
 		config:   cfg,
 	}
+}
+
+// SetScheduler sets the scheduler for processing queue
+func (s *Server) SetScheduler(scheduler Scheduler) {
+	s.scheduler = scheduler
 }
 
 func (s *Server) Start(port int) error {
@@ -46,6 +57,8 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/stats", s.authMiddleware(s.handleStats))
 	mux.HandleFunc("/api/threads", s.authMiddleware(s.handleThreads))
 	mux.HandleFunc("/api/threads/", s.authMiddleware(s.handleThreadMessages))
+	mux.HandleFunc("/api/queue", s.authMiddleware(s.handleQueue))
+	mux.HandleFunc("/api/queue/process", s.authMiddleware(s.handleQueueProcess))
 	mux.HandleFunc("/health", s.handleHealth)
 
 	s.server = &http.Server{

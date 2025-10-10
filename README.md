@@ -88,10 +88,10 @@ This will open your browser for Google authentication. Grant the requested permi
 make install
 
 # Start the service
-launchctl load ~/Library/LaunchAgents/com.alexrabarts.focus-agent.plist
+launchctl load ~/Library/LaunchAgents/com.rabarts.focus-agent.plist
 
 # Check status
-launchctl list | grep focus-agent
+launchctl list | grep rabarts
 ```
 
 ## Usage

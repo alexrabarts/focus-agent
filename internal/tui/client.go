@@ -97,6 +97,14 @@ type MessageResponse struct {
 	Sensitivity string   `json:"sensitivity"`
 }
 
+// QueueItemResponse matches the API response structure
+type QueueItemResponse struct {
+	ThreadID  string `json:"thread_id"`
+	Subject   string `json:"subject"`
+	From      string `json:"from"`
+	Timestamp string `json:"timestamp"`
+}
+
 // Helper to make authenticated requests
 func (c *APIClient) doRequest(method, path string, body interface{}) (*http.Response, error) {
 	var reqBody *bytes.Buffer
@@ -372,4 +380,43 @@ func (c *APIClient) GetThreadMessages(threadID string) ([]*db.Message, error) {
 	}
 
 	return result, nil
+}
+
+// GetQueue fetches threads waiting for AI processing from the remote API
+func (c *APIClient) GetQueue() ([]QueueItem, error) {
+	resp, err := c.doRequest("GET", "/api/queue", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var queueResp []QueueItemResponse
+	if err := json.NewDecoder(resp.Body).Decode(&queueResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Convert to QueueItem
+	result := make([]QueueItem, 0, len(queueResp))
+	for _, item := range queueResp {
+		timestamp, _ := time.Parse(time.RFC3339, item.Timestamp)
+
+		result = append(result, QueueItem{
+			ThreadID:  item.ThreadID,
+			Subject:   item.Subject,
+			From:      item.From,
+			Timestamp: timestamp,
+		})
+	}
+
+	return result, nil
+}
+
+// TriggerProcessing triggers AI processing of the queue via the remote API
+func (c *APIClient) TriggerProcessing() error {
+	resp, err := c.doRequest("POST", "/api/queue/process", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
 }

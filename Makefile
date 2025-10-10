@@ -6,7 +6,7 @@ BINARY_PATH=bin/$(BINARY_NAME)
 MAIN_PATH=cmd/agent/main.go
 INSTALL_PATH=/usr/local/bin/$(BINARY_NAME)
 CONFIG_DIR=~/.focus-agent
-LAUNCHAGENT_PLIST=com.alexrabarts.focus-agent.plist
+LAUNCHAGENT_PLIST=com.rabarts.focus-agent.plist
 LAUNCHAGENT_PATH=~/Library/LaunchAgents/$(LAUNCHAGENT_PLIST)
 
 # Version info

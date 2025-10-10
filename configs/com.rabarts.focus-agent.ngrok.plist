@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.alexrabarts.focus-agent.ngrok</string>
+    <string>com.rabarts.focus-agent.ngrok</string>
 
     <key>ProgramArguments</key>
     <array>
