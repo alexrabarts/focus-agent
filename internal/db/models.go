@@ -175,14 +175,9 @@ func (db *DB) SaveThread(thread *Thread) error {
 			last_synced = excluded.last_synced
 	`
 
-	relevantToUserInt := 0
-	if thread.RelevantToUser {
-		relevantToUserInt = 1
-	}
-
 	_, err := db.Exec(query,
 		thread.ID, thread.LastHistoryID, thread.Summary, thread.SummaryHash,
-		thread.TaskCount, thread.PriorityScore, relevantToUserInt, nextFollowup, thread.LastSynced.Unix(),
+		thread.TaskCount, thread.PriorityScore, thread.RelevantToUser, nextFollowup, thread.LastSynced.Unix(),
 	)
 	return err
 }
@@ -571,17 +566,14 @@ func (db *DB) GetThreadsWithSummaries(limit int) ([]*Thread, error) {
 	for rows.Next() {
 		thread := &Thread{}
 		var nextFollowupTS, lastSyncedTS, createdTS, updatedTS sql.NullInt64
-		var relevantToUserInt int
 
 		err := rows.Scan(
 			&thread.ID, &thread.LastHistoryID, &thread.Summary, &thread.SummaryHash,
-			&thread.TaskCount, &thread.PriorityScore, &relevantToUserInt, &nextFollowupTS, &lastSyncedTS, &createdTS, &updatedTS,
+			&thread.TaskCount, &thread.PriorityScore, &thread.RelevantToUser, &nextFollowupTS, &lastSyncedTS, &createdTS, &updatedTS,
 		)
 		if err != nil {
 			return nil, err
 		}
-
-		thread.RelevantToUser = relevantToUserInt != 0
 
 		if nextFollowupTS.Valid {
 			t := time.Unix(nextFollowupTS.Int64, 0)

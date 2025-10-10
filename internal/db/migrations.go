@@ -19,8 +19,8 @@ func CreateMigrationTable(db *DB) error {
 	query := `
 		CREATE TABLE IF NOT EXISTS migration_versions (
 			version INTEGER PRIMARY KEY,
-			name TEXT NOT NULL,
-			applied_at INTEGER NOT NULL
+			name VARCHAR NOT NULL,
+			applied_at BIGINT NOT NULL
 		)
 	`
 	_, err := db.Exec(query)
@@ -78,7 +78,7 @@ func GetMigrations() []Migration {
 				// This migration is handled by the SQL file
 				// We just record it as applied if tables exist
 				var count int
-				err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages'`).Scan(&count)
+				err := tx.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name='messages'`).Scan(&count)
 				if err != nil {
 					return err
 				}
@@ -90,7 +90,6 @@ func GetMigrations() []Migration {
 			Down: func(tx *sql.Tx) error {
 				// Drop all tables
 				tables := []string{
-					"messages_fts", "tasks_fts",
 					"messages", "threads", "tasks", "docs", "events",
 					"prefs", "usage", "llm_cache", "sync_state",
 				}
@@ -106,19 +105,45 @@ func GetMigrations() []Migration {
 			Version: 2,
 			Name:    "add_thread_priority_fields",
 			Up: func(tx *sql.Tx) error {
-				// Add priority_score and relevant_to_user columns to threads table
-				_, err := tx.Exec(`
-					ALTER TABLE threads ADD COLUMN priority_score REAL DEFAULT 0;
-				`)
+				// Check if priority_score column exists
+				var count int
+				err := tx.QueryRow(`
+					SELECT COUNT(*)
+					FROM information_schema.columns
+					WHERE table_name='threads' AND column_name='priority_score'
+				`).Scan(&count)
 				if err != nil {
-					return fmt.Errorf("failed to add priority_score column: %w", err)
+					return fmt.Errorf("failed to check priority_score column: %w", err)
 				}
 
-				_, err = tx.Exec(`
-					ALTER TABLE threads ADD COLUMN relevant_to_user INTEGER DEFAULT 0;
-				`)
+				// Add priority_score column if it doesn't exist
+				if count == 0 {
+					_, err = tx.Exec(`
+						ALTER TABLE threads ADD COLUMN priority_score DOUBLE DEFAULT 0;
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to add priority_score column: %w", err)
+					}
+				}
+
+				// Check if relevant_to_user column exists
+				err = tx.QueryRow(`
+					SELECT COUNT(*)
+					FROM information_schema.columns
+					WHERE table_name='threads' AND column_name='relevant_to_user'
+				`).Scan(&count)
 				if err != nil {
-					return fmt.Errorf("failed to add relevant_to_user column: %w", err)
+					return fmt.Errorf("failed to check relevant_to_user column: %w", err)
+				}
+
+				// Add relevant_to_user column if it doesn't exist
+				if count == 0 {
+					_, err = tx.Exec(`
+						ALTER TABLE threads ADD COLUMN relevant_to_user BOOLEAN DEFAULT false;
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to add relevant_to_user column: %w", err)
+					}
 				}
 
 				// Create index on priority_score for sorting
@@ -132,8 +157,7 @@ func GetMigrations() []Migration {
 				return nil
 			},
 			Down: func(tx *sql.Tx) error {
-				// Note: SQLite doesn't support DROP COLUMN until version 3.35.0
-				// For compatibility, we'll leave the columns but could recreate table if needed
+				// Note: DuckDB supports DROP COLUMN
 				_, err := tx.Exec(`DROP INDEX IF EXISTS idx_threads_priority`)
 				return err
 			},
@@ -142,18 +166,31 @@ func GetMigrations() []Migration {
 			Version: 3,
 			Name:    "add_matched_priorities_to_tasks",
 			Up: func(tx *sql.Tx) error {
-				// Add matched_priorities column to tasks table to store which priority areas matched
-				_, err := tx.Exec(`
-					ALTER TABLE tasks ADD COLUMN matched_priorities TEXT DEFAULT NULL;
-				`)
+				// Check if matched_priorities column exists
+				var count int
+				err := tx.QueryRow(`
+					SELECT COUNT(*)
+					FROM information_schema.columns
+					WHERE table_name='tasks' AND column_name='matched_priorities'
+				`).Scan(&count)
 				if err != nil {
-					return fmt.Errorf("failed to add matched_priorities column: %w", err)
+					return fmt.Errorf("failed to check matched_priorities column: %w", err)
+				}
+
+				// Add matched_priorities column if it doesn't exist
+				if count == 0 {
+					_, err = tx.Exec(`
+						ALTER TABLE tasks ADD COLUMN matched_priorities VARCHAR DEFAULT NULL;
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to add matched_priorities column: %w", err)
+					}
 				}
 
 				return nil
 			},
 			Down: func(tx *sql.Tx) error {
-				// Note: SQLite doesn't support DROP COLUMN easily
+				// Note: DuckDB supports DROP COLUMN
 				// For compatibility, we'll leave the column
 				return nil
 			},

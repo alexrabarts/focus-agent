@@ -32,6 +32,7 @@ var (
 	reprocessTasks      = flag.Bool("reprocess-tasks", false, "Re-extract tasks from existing thread summaries with updated parser")
 	cleanupOthers       = flag.Bool("cleanup-other-tasks", false, "Delete tasks assigned to other people (one-time cleanup)")
 	recalculatePriorities = flag.Bool("recalculate-priorities", false, "Recalculate priority scores and populate matched priorities for all pending tasks")
+	migrateToDuckDB     = flag.String("migrate-to-duckdb", "", "Migrate SQLite database to DuckDB (provide new DuckDB path)")
 	version             = flag.Bool("version", false, "Show version")
 )
 
@@ -52,6 +53,15 @@ func main() {
 	cfg, err := config.Load(*configFile)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Handle migrate-to-duckdb mode
+	if *migrateToDuckDB != "" {
+		log.Println("Starting SQLite to DuckDB migration...")
+		if err := db.MigrateSQLiteToDuckDB(cfg.Database.Path, *migrateToDuckDB); err != nil {
+			log.Fatalf("Migration failed: %v", err)
+		}
+		os.Exit(0)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -16,7 +16,8 @@ GIT_COMMIT = $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 # Build flags
 LDFLAGS = -ldflags "-X main.VERSION=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT)"
-BUILD_TAGS = -tags "fts5"
+# DuckDB requires CGO
+export CGO_ENABLED=1
 
 # Default target
 .DEFAULT_GOAL := help
@@ -40,7 +41,7 @@ deps: ## Download Go module dependencies
 build: deps ## Build the binary
 	@echo "Building $(BINARY_NAME) $(VERSION)..."
 	@mkdir -p bin
-	@go build $(BUILD_TAGS) $(LDFLAGS) -o $(BINARY_PATH) $(MAIN_PATH)
+	@go build $(LDFLAGS) -o $(BINARY_PATH) $(MAIN_PATH)
 	@echo "Binary built at $(BINARY_PATH)"
 
 .PHONY: run
@@ -203,7 +204,7 @@ reset-db: ## Reset the database (WARNING: deletes all data)
 	@read -p "Are you sure? (y/N) " -n 1 -r; \
 	echo ""; \
 	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
-		rm -f $(CONFIG_DIR)/data.db*; \
+		rm -f $(CONFIG_DIR)/data.duckdb* $(CONFIG_DIR)/data.db*; \
 		echo "Database reset"; \
 	else \
 		echo "Cancelled"; \
@@ -214,7 +215,7 @@ backup: ## Backup config and database
 	@echo "Creating backup..."
 	@mkdir -p $(CONFIG_DIR)/backups
 	@tar czf $(CONFIG_DIR)/backups/backup-$(shell date +%Y%m%d-%H%M%S).tar.gz \
-		-C $(CONFIG_DIR) config.yaml data.db token.json 2>/dev/null || true
+		-C $(CONFIG_DIR) config.yaml data.duckdb token.json 2>/dev/null || true
 	@echo "Backup created in $(CONFIG_DIR)/backups/"
 
 .PHONY: docker-build
@@ -233,18 +234,15 @@ release: clean test build ## Create release build
 
 # Development database commands
 .PHONY: db-shell
-db-shell: ## Open SQLite shell
-	@sqlite3 $(CONFIG_DIR)/data.db
+db-shell: ## Open DuckDB shell
+	@echo "Opening DuckDB shell (use .help for commands, .quit to exit)..."
+	@duckdb $(CONFIG_DIR)/data.duckdb
 
 .PHONY: db-stats
-db-stats: ## Show database statistics
+db-stats: build ## Show database statistics
 	@echo "Database statistics:"
-	@sqlite3 $(CONFIG_DIR)/data.db \
-		"SELECT 'Messages' as table_name, COUNT(*) as count FROM messages \
-		UNION SELECT 'Tasks', COUNT(*) FROM tasks \
-		UNION SELECT 'Events', COUNT(*) FROM events \
-		UNION SELECT 'Threads', COUNT(*) FROM threads \
-		UNION SELECT 'Documents', COUNT(*) FROM docs;"
+	@$(BINARY_PATH) -config $(CONFIG_DIR)/config.yaml -once 2>&1 | grep -A 5 "SYNC SUMMARY" || \
+		echo "Unable to fetch stats. Ensure database is initialized."
 
 # CI/CD targets
 .PHONY: ci

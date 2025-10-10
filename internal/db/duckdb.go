@@ -6,14 +6,14 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/marcboeker/go-duckdb"
 )
 
 type DB struct {
 	*sql.DB
 }
 
-// Init creates and initializes the SQLite database
+// Init creates and initializes the DuckDB database
 func Init(dbPath string) (*DB, error) {
 	// Expand home directory
 	if dbPath[:2] == "~/" {
@@ -30,8 +30,8 @@ func Init(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
-	// Open database
-	sqlDB, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=1")
+	// Open database with DuckDB driver
+	sqlDB, err := sql.Open("duckdb", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -41,18 +41,16 @@ func Init(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	// Set pragmas for performance
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA cache_size=-64000", // 64MB cache
-		"PRAGMA temp_store=MEMORY",
-		"PRAGMA foreign_keys=ON",
+	// Configure DuckDB settings for performance
+	settings := []string{
+		"SET memory_limit='1GB'",
+		"SET threads TO 4",
+		"SET default_order='ASC'",
 	}
 
-	for _, pragma := range pragmas {
-		if _, err := sqlDB.Exec(pragma); err != nil {
-			return nil, fmt.Errorf("failed to set pragma %s: %w", pragma, err)
+	for _, setting := range settings {
+		if _, err := sqlDB.Exec(setting); err != nil {
+			return nil, fmt.Errorf("failed to set DuckDB setting %s: %w", setting, err)
 		}
 	}
 
