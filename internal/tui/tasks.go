@@ -417,11 +417,6 @@ func (m *TasksModel) renderTaskDetail() string {
 		}
 	}
 
-	// Stakeholder
-	if task.Stakeholder != "" {
-		b.WriteString(infoStyle.Render(fmt.Sprintf("Owner/Stakeholder: %s", task.Stakeholder)) + "\n")
-	}
-
 	// Project
 	if task.Project != "" {
 		b.WriteString(infoStyle.Render(fmt.Sprintf("Project: %s", task.Project)) + "\n")
