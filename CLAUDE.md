@@ -1,5 +1,12 @@
 # Claude Development Notes
 
+## Development Workflow
+
+**Git Operations:**
+- NEVER push to remote repository automatically
+- Always wait for explicit user instruction to push
+- Commit locally as work progresses, but only push when user says "push" or "git push"
+
 ## Project Conventions
 
 **Package Naming:**
