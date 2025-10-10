@@ -325,10 +325,8 @@ func (m ThreadsModel) renderThreadDetail() string {
 
 	// Gmail link
 	gmailURL := fmt.Sprintf("https://mail.google.com/mail/u/0/#inbox/%s", m.selectedThread.ID)
-	linkStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("39")).
-		Underline(true)
-	b.WriteString("  " + linkStyle.Render(gmailURL) + "\n\n")
+	hyperlink := makeHyperlink(gmailURL, "🔗 View in Gmail")
+	b.WriteString(fmt.Sprintf("  \x1b[38;5;39m\x1b[4m%s\x1b[0m\n\n", hyperlink))
 
 	// AI Summary section
 	summaryTitleStyle := lipgloss.NewStyle().

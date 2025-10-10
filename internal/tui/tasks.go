@@ -395,22 +395,25 @@ func (m *TasksModel) renderTaskDetail() string {
 
 	if task.SourceID != "" {
 		var linkURL string
+		var linkText string
 
 		switch task.Source {
 		case "gmail":
 			linkURL = fmt.Sprintf("https://mail.google.com/mail/u/0/#inbox/%s", task.SourceID)
+			linkText = "🔗 View email"
 		case "google_calendar":
 			linkURL = fmt.Sprintf("https://calendar.google.com/calendar/r/eventedit/%s", task.SourceID)
+			linkText = "🔗 View event"
 		case "google_tasks":
 			linkURL = "https://tasks.google.com"
+			linkText = "🔗 View in Google Tasks"
 		}
 
 		if linkURL != "" {
-			linkStyle := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("39")).
-				Underline(true).
-				Padding(0, 2)
-			b.WriteString(linkStyle.Render(linkURL) + "\n")
+			// Create hyperlink with OSC 8
+			hyperlink := makeHyperlink(linkURL, linkText)
+			// Apply color and underline styling
+			b.WriteString(fmt.Sprintf("  \x1b[38;5;39m\x1b[4m%s\x1b[0m\n", hyperlink))
 		}
 	}
 
