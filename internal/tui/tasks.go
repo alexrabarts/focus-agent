@@ -490,19 +490,106 @@ func (m *TasksModel) renderTaskDetail() string {
 		stakeholderLabel = "Executive"
 	}
 
+	// Parse strategic alignment from matched priorities
+	strategicScore := 0.0
+	strategicDetail := ""
+	if task.MatchedPriorities != "" && task.MatchedPriorities != "{}" && task.MatchedPriorities != "null" {
+		var matches db.PriorityMatches
+		if err := json.Unmarshal([]byte(task.MatchedPriorities), &matches); err == nil {
+			matchCount := len(matches.OKRs) + len(matches.FocusAreas) + len(matches.Projects)
+			if matches.KeyStakeholder {
+				matchCount++
+			}
+
+			if matchCount > 0 {
+				// Score from 0-5 based on number of matches (capped at 5)
+				strategicScore = float64(matchCount)
+				if strategicScore > 5 {
+					strategicScore = 5
+				}
+
+				// Build detail string
+				parts := []string{}
+				if len(matches.OKRs) > 0 {
+					parts = append(parts, fmt.Sprintf("%d OKR(s)", len(matches.OKRs)))
+				}
+				if len(matches.FocusAreas) > 0 {
+					parts = append(parts, fmt.Sprintf("%d focus area(s)", len(matches.FocusAreas)))
+				}
+				if len(matches.Projects) > 0 {
+					parts = append(parts, fmt.Sprintf("%d project(s)", len(matches.Projects)))
+				}
+				if matches.KeyStakeholder {
+					parts = append(parts, "key stakeholder")
+				}
+				strategicDetail = strings.Join(parts, ", ")
+			}
+		}
+	}
+	if strategicDetail == "" {
+		strategicDetail = "No strategic matches"
+	}
+
 	// Calculate contributions
 	impactContribution := 0.3 * impact
 	urgencyContribution := 0.25 * urgency
 	effortContribution := -0.1 * effortFactor
 	stakeholderContribution := 0.15 * stakeholderWeight
-	strategicContribution := 0.0 // We don't have this calculated at display time
+	strategicContribution := 0.2 * strategicScore
+
+	// Impact description
+	impactDesc := ""
+	switch task.Impact {
+	case 5:
+		impactDesc = "Critical/transformational impact"
+	case 4:
+		impactDesc = "Major impact on goals"
+	case 3:
+		impactDesc = "Moderate impact"
+	case 2:
+		impactDesc = "Minor impact"
+	case 1:
+		impactDesc = "Minimal impact"
+	}
+
+	// Urgency description
+	urgencyDesc := ""
+	switch task.Urgency {
+	case 5:
+		urgencyDesc = "Immediate/time-critical"
+	case 4:
+		urgencyDesc = "Very time-sensitive"
+	case 3:
+		urgencyDesc = "Moderately urgent"
+	case 2:
+		urgencyDesc = "Low urgency"
+	case 1:
+		urgencyDesc = "No time pressure"
+	}
+
+	// Effort description
+	effortDesc := ""
+	switch task.Effort {
+	case "S":
+		effortDesc = "Quick win (<2 hours)"
+	case "M":
+		effortDesc = "Half day (2-4 hours)"
+	case "L":
+		effortDesc = "Full day+ (>4 hours)"
+	}
 
 	b.WriteString(scoreStyle.Render("Formula: 0.3×impact + 0.25×urgency + 0.2×strategic - 0.1×effort + 0.15×stakeholder") + "\n\n")
-	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Impact: %.0f/5 (weight: 0.3) → +%.2f", impact, impactContribution)) + "\n")
-	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Urgency: %.0f/5 (weight: 0.25) → +%.2f", urgency, urgencyContribution)) + "\n")
-	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Strategic Alignment: %.1f/5 (weight: 0.2) → +%.2f", strategicContribution, strategicContribution)) + "\n")
-	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Effort: %s (%.1f, weight: -0.1) → %.2f", effortLabel, effortFactor, effortContribution)) + "\n")
-	b.WriteString(scoreStyle.Render(fmt.Sprintf("└─ Stakeholder: %s (%.1f, weight: 0.15) → +%.2f", stakeholderLabel, stakeholderWeight, stakeholderContribution)) + "\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Impact: %.0f/5 - %s (weight: 0.3) → +%.2f", impact, impactDesc, impactContribution)) + "\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Urgency: %.0f/5 - %s (weight: 0.25) → +%.2f", urgency, urgencyDesc, urgencyContribution)) + "\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Strategic Alignment: %.1f/5 - %s (weight: 0.2) → +%.2f", strategicScore, strategicDetail, strategicContribution)) + "\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Effort: %s - %s (%.1f, weight: -0.1) → %.2f", effortLabel, effortDesc, effortFactor, effortContribution)) + "\n")
+
+	// Show stakeholder detail if there is one
+	if task.Stakeholder != "" {
+		b.WriteString(scoreStyle.Render(fmt.Sprintf("└─ Stakeholder: %s - %s (%.1f, weight: 0.15) → +%.2f", stakeholderLabel, task.Stakeholder, stakeholderWeight, stakeholderContribution)) + "\n")
+	} else {
+		b.WriteString(scoreStyle.Render(fmt.Sprintf("└─ Stakeholder: %s (%.1f, weight: 0.15) → +%.2f", stakeholderLabel, stakeholderWeight, stakeholderContribution)) + "\n")
+	}
 	b.WriteString(scoreStyle.Render("──────────────────────────────────────────") + "\n")
 	b.WriteString(scoreStyle.Render(fmt.Sprintf("Total Score: %.2f/5", task.Score)) + "\n")
 
