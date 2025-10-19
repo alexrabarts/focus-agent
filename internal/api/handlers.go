@@ -369,12 +369,12 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 
 	// Query threads without summaries
 	query := `
-		SELECT DISTINCT t.id, m.subject, m.from_addr, m.ts
+		SELECT DISTINCT t.id, ANY_VALUE(m.subject) as subject, ANY_VALUE(m.from_addr) as from_addr, MAX(m.ts) as ts
 		FROM threads t
 		JOIN messages m ON t.id = m.thread_id
 		WHERE t.summary IS NULL OR t.summary = ''
 		GROUP BY t.id
-		ORDER BY m.ts DESC
+		ORDER BY MAX(m.ts) DESC
 		LIMIT 100
 	`
 

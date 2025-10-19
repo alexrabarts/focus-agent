@@ -161,17 +161,17 @@ func (db *DB) SaveThread(thread *Thread) error {
 		nextFollowup = &ts
 	}
 
+	// During sync, we only update sync-related fields
+	// AI-generated fields (priority_score, summary, etc.) and indexed fields are preserved
+	// Note: DuckDB doesn't allow updating indexed columns in ON CONFLICT DO UPDATE
 	query := `
 		INSERT INTO threads (id, last_history_id, summary, summary_hash, task_count, priority_score, relevant_to_user, next_followup_ts, last_synced)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
-			last_history_id = excluded.last_history_id,
-			summary = excluded.summary,
-			summary_hash = excluded.summary_hash,
-			task_count = excluded.task_count,
-			priority_score = excluded.priority_score,
-			relevant_to_user = excluded.relevant_to_user,
-			next_followup_ts = excluded.next_followup_ts,
+			last_history_id = COALESCE(excluded.last_history_id, threads.last_history_id),
+			summary = COALESCE(NULLIF(excluded.summary, ''), threads.summary),
+			summary_hash = COALESCE(NULLIF(excluded.summary_hash, ''), threads.summary_hash),
+			task_count = CASE WHEN excluded.task_count > 0 THEN excluded.task_count ELSE threads.task_count END,
 			last_synced = excluded.last_synced
 	`
 
@@ -196,20 +196,19 @@ func (db *DB) SaveTask(task *Task) error {
 		completedTS = &ts
 	}
 
+	// Note: DuckDB doesn't allow updating indexed columns in ON CONFLICT DO UPDATE
+	// Indexed columns: status, due_ts, score, source, source_id
 	query := `
 		INSERT INTO tasks (id, source, source_id, title, description, due_ts, project, impact, urgency, effort, stakeholder, score, status, metadata, completed_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			title = excluded.title,
 			description = excluded.description,
-			due_ts = excluded.due_ts,
 			project = excluded.project,
 			impact = excluded.impact,
 			urgency = excluded.urgency,
 			effort = excluded.effort,
 			stakeholder = excluded.stakeholder,
-			score = excluded.score,
-			status = excluded.status,
 			metadata = excluded.metadata,
 			completed_at = excluded.completed_at
 	`
@@ -501,13 +500,13 @@ func (db *DB) SearchMessages(query string, limit int) ([]*Message, error) {
 func (db *DB) SaveEvent(event *Event) error {
 	attendeesJSON, _ := json.Marshal(event.Attendees)
 
+	// Note: DuckDB doesn't allow updating indexed columns in ON CONFLICT DO UPDATE
+	// Indexed columns: start_ts, end_ts
 	query := `
 		INSERT INTO events (id, title, start_ts, end_ts, location, description, attendees, meeting_link, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			title = excluded.title,
-			start_ts = excluded.start_ts,
-			end_ts = excluded.end_ts,
 			location = excluded.location,
 			description = excluded.description,
 			attendees = excluded.attendees,
@@ -525,6 +524,8 @@ func (db *DB) SaveEvent(event *Event) error {
 
 // SaveDocument saves a document to the database
 func (db *DB) SaveDocument(doc *Document) error {
+	// Note: DuckDB doesn't allow updating indexed columns in ON CONFLICT DO UPDATE
+	// Indexed columns: meeting_id, updated_ts
 	query := `
 		INSERT INTO docs (id, title, link, mime_type, meeting_id, summary, owner, updated_ts, last_synced)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -534,7 +535,6 @@ func (db *DB) SaveDocument(doc *Document) error {
 			mime_type = excluded.mime_type,
 			summary = excluded.summary,
 			owner = excluded.owner,
-			updated_ts = excluded.updated_ts,
 			last_synced = excluded.last_synced
 	`
 

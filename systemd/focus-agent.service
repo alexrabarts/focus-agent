@@ -1,0 +1,16 @@
+[Unit]
+Description=Focus Agent - AI Productivity Assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@INSTALL_DIR@/focus-agent -config @INSTALL_DIR@/config.yaml -api
+WorkingDirectory=@INSTALL_DIR@
+Restart=always
+RestartSec=60
+StandardOutput=append:@INSTALL_DIR@/log.out
+StandardError=append:@INSTALL_DIR@/log.out
+
+[Install]
+WantedBy=default.target

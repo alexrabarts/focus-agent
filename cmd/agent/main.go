@@ -67,6 +67,15 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Handle TUI remote mode early - doesn't need database or other services
+	if *tuiMode && cfg.Remote.URL != "" {
+		log.Println("Starting TUI in remote mode...")
+		if err := tui.Start(nil, nil, nil, nil, cfg); err != nil {
+			log.Fatalf("TUI error: %v", err)
+		}
+		os.Exit(0)
+	}
+
 	// Initialize database
 	database, err := db.Init(cfg.Database.Path)
 	if err != nil {
@@ -149,9 +158,9 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Handle TUI mode
+	// Handle TUI mode (local mode only - remote mode handled earlier)
 	if *tuiMode {
-		log.Println("Starting TUI...")
+		log.Println("Starting TUI in local mode...")
 		if err := tui.Start(database, googleClients, llmClient, plannerService, cfg); err != nil {
 			log.Fatalf("TUI error: %v", err)
 		}
