@@ -25,6 +25,8 @@ google:
     - https://www.googleapis.com/auth/drive.readonly
     - https://www.googleapis.com/auth/calendar.readonly
     - https://www.googleapis.com/auth/tasks.readonly
+    - https://www.googleapis.com/auth/chat.messages
+    - https://www.googleapis.com/auth/chat.spaces.readonly
 
   # Polling intervals in minutes
   polling_minutes:

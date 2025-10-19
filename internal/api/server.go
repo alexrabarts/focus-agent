@@ -59,6 +59,7 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/api/threads/", s.authMiddleware(s.handleThreadMessages))
 	mux.HandleFunc("/api/queue", s.authMiddleware(s.handleQueue))
 	mux.HandleFunc("/api/queue/process", s.authMiddleware(s.handleQueueProcess))
+	mux.HandleFunc("/api/brief", s.authMiddleware(s.handleBrief))
 	mux.HandleFunc("/health", s.handleHealth)
 
 	s.server = &http.Server{

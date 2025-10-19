@@ -1,21 +1,25 @@
 package google
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"google.golang.org/api/chat/v1"
 
 	"github.com/alexrabarts/focus-agent/internal/config"
 	"github.com/alexrabarts/focus-agent/internal/db"
 )
 
-// ChatClient handles Google Chat webhook operations
+// ChatClient handles Google Chat API operations
 type ChatClient struct {
-	Config *config.Config
+	Service    *chat.Service
+	Config     *config.Config
+	httpClient *http.Client
+	dmSpace    string // Cached DM space name
 }
 
 // ChatMessage represents a Google Chat message
@@ -93,51 +97,195 @@ type OpenLink struct {
 	URL string `json:"url"`
 }
 
-// SendMessage sends a message to Google Chat
-func (c *ChatClient) SendMessage(ctx context.Context, message *ChatMessage) error {
-	// Add thread if configured
-	if c.Config.Chat.ThreadKey != "" {
-		message.Thread = &ChatThread{
-			Name: fmt.Sprintf("spaces/%s/threads/%s", c.Config.Chat.SpaceID, c.Config.Chat.ThreadKey),
+// getDMSpace finds or creates a DM space with the Focus Agent bot
+func (c *ChatClient) getDMSpace(ctx context.Context) (string, error) {
+	// Return cached space if available
+	if c.dmSpace != "" {
+		return c.dmSpace, nil
+	}
+
+	// List spaces to find existing DM with the bot
+	listCall := c.Service.Spaces.List().Filter("spaceType = \"DIRECT_MESSAGE\"")
+	resp, err := listCall.Do()
+	if err != nil {
+		return "", fmt.Errorf("failed to list spaces: %w", err)
+	}
+
+	// Look for a DM space (they should have spaceType DIRECT_MESSAGE)
+	for _, space := range resp.Spaces {
+		if space.SpaceType == "DIRECT_MESSAGE" {
+			// Cache and return the DM space
+			c.dmSpace = space.Name
+			log.Printf("Found DM space: %s", c.dmSpace)
+			return c.dmSpace, nil
 		}
 	}
 
-	// Marshal message to JSON
-	payload, err := json.Marshal(message)
+	// If no DM space found, we need to create one
+	// Note: DM spaces are typically created when the user first messages the bot
+	// For now, we'll use "spaces/AAAAAAAAAAA" as a placeholder that will be replaced
+	// when the user first interacts with the bot
+	return "", fmt.Errorf("no DM space found with Focus Agent bot - please send a message to the bot first")
+}
+
+// SendMessage sends a message to Google Chat via the API
+func (c *ChatClient) SendMessage(ctx context.Context, message *ChatMessage) error {
+	// Get the DM space
+	spaceName, err := c.getDMSpace(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
+		return fmt.Errorf("failed to get DM space: %w", err)
 	}
 
-	// Send webhook request
-	req, err := http.NewRequestWithContext(ctx, "POST", c.Config.Chat.WebhookURL, bytes.NewBuffer(payload))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+	// Convert our message format to Chat API message format
+	chatMessage := &chat.Message{}
+
+	if message.Text != "" {
+		chatMessage.Text = message.Text
 	}
 
-	req.Header.Set("Content-Type", "application/json")
+	if len(message.Cards) > 0 {
+		// Convert cards to Chat API format
+		cardsV2 := make([]*chat.CardWithId, len(message.Cards))
+		for i, card := range message.Cards {
+			cardsV2[i] = c.convertToAPICard(&card)
+		}
+		chatMessage.CardsV2 = cardsV2
+	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	// Create the message
+	createCall := c.Service.Spaces.Messages.Create(spaceName, chatMessage)
+	_, err = createCall.Do()
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("chat webhook returned status %d", resp.StatusCode)
 	}
 
 	return nil
 }
 
-// SendDailyBrief sends the daily brief card
+// convertToAPICard converts our internal card format to Chat API CardWithId format
+func (c *ChatClient) convertToAPICard(card *ChatCard) *chat.CardWithId {
+	// This is a simplified conversion - we'll need to map our card structure
+	// to the Chat API's card format
+	apiCard := &chat.GoogleAppsCardV1Card{}
+
+	if card.Header != nil {
+		apiCard.Header = &chat.GoogleAppsCardV1CardHeader{
+			Title:    card.Header.Title,
+			Subtitle: card.Header.Subtitle,
+		}
+	}
+
+	// Convert sections
+	if len(card.Sections) > 0 {
+		sections := make([]*chat.GoogleAppsCardV1Section, len(card.Sections))
+		for i, section := range card.Sections {
+			apiSection := &chat.GoogleAppsCardV1Section{
+				Header: section.Header,
+			}
+
+			// Convert widgets
+			widgets := make([]*chat.GoogleAppsCardV1Widget, len(section.Widgets))
+			for j, widget := range section.Widgets {
+				apiWidget := &chat.GoogleAppsCardV1Widget{}
+
+				if widget.TextParagraph != nil {
+					apiWidget.TextParagraph = &chat.GoogleAppsCardV1TextParagraph{
+						Text: widget.TextParagraph.Text,
+					}
+				}
+
+				if widget.KeyValue != nil {
+					apiWidget.DecoratedText = &chat.GoogleAppsCardV1DecoratedText{
+						TopLabel:    widget.KeyValue.TopLabel,
+						Text:        widget.KeyValue.Content,
+						BottomLabel: widget.KeyValue.BottomLabel,
+					}
+				}
+
+				widgets[j] = apiWidget
+			}
+			apiSection.Widgets = widgets
+			sections[i] = apiSection
+		}
+		apiCard.Sections = sections
+	}
+
+	return &chat.CardWithId{
+		Card: apiCard,
+	}
+}
+
+// SendDailyBrief sends the daily brief as text (cards not supported with user credentials)
 func (c *ChatClient) SendDailyBrief(ctx context.Context, tasks []*db.Task, events []*db.Event) error {
-	card := c.createDailyBriefCard(tasks, events)
+	text := c.createDailyBriefText(tasks, events)
 	message := &ChatMessage{
-		Cards: []ChatCard{card},
+		Text: text,
 	}
 
 	return c.SendMessage(ctx, message)
+}
+
+// createDailyBriefText creates a plain text daily brief
+func (c *ChatClient) createDailyBriefText(tasks []*db.Task, events []*db.Event) string {
+	now := time.Now()
+	var brief strings.Builder
+
+	// Header
+	brief.WriteString(fmt.Sprintf("*Daily Brief - %s*\n", now.Format("Monday, January 2")))
+	brief.WriteString("_Your focus plan for today_\n\n")
+
+	// Top Tasks section
+	if len(tasks) > 0 {
+		brief.WriteString("📋 *Top Priority Tasks*\n")
+		for i, task := range tasks {
+			if i >= 10 {
+				break
+			}
+			priority := c.getPriorityIndicator(task.Score)
+			dueStr := ""
+			if task.DueTS != nil {
+				dueStr = fmt.Sprintf(" • Due: %s", task.DueTS.Format("3:04 PM"))
+			}
+			brief.WriteString(fmt.Sprintf("\n%s *Task #%d*\n", priority, i+1))
+			brief.WriteString(fmt.Sprintf("%s\n", task.Title))
+			brief.WriteString(fmt.Sprintf("_%s%s_\n", task.Source, dueStr))
+		}
+		brief.WriteString("\n")
+	}
+
+	// Today's Meetings section
+	todayEvents := []*db.Event{}
+	for _, event := range events {
+		if event.StartTS.Day() == now.Day() {
+			todayEvents = append(todayEvents, event)
+		}
+	}
+
+	if len(todayEvents) > 0 {
+		brief.WriteString("📅 *Today's Meetings*\n")
+		for _, event := range todayEvents {
+			timeStr := fmt.Sprintf("%s - %s",
+				event.StartTS.Format("3:04 PM"),
+				event.EndTS.Format("3:04 PM"))
+			brief.WriteString(fmt.Sprintf("\n• %s\n", event.Title))
+			brief.WriteString(fmt.Sprintf("  _%s_\n", timeStr))
+			if event.MeetingLink != "" {
+				brief.WriteString(fmt.Sprintf("  Join: %s\n", event.MeetingLink))
+			}
+		}
+		brief.WriteString("\n")
+	}
+
+	// Focus Blocks section
+	brief.WriteString("🎯 *Recommended Focus Blocks*\n")
+	brief.WriteString(c.generateFocusBlocks(tasks, events))
+	brief.WriteString("\n")
+
+	// Quick Stats section
+	brief.WriteString("📊 *Quick Stats*\n")
+	brief.WriteString(c.generateStats(tasks, events))
+
+	return brief.String()
 }
 
 // createDailyBriefCard creates a formatted daily brief card

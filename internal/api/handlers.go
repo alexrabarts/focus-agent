@@ -418,3 +418,39 @@ func (s *Server) handleQueueProcess(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "processing started"})
 }
+
+// POST /api/brief - Send daily brief via Google Chat
+func (s *Server) handleBrief(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	ctx := context.Background()
+
+	// Get pending tasks (top 10 for the brief)
+	tasks, err := s.database.GetPendingTasks(10)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to get tasks: "+err.Error())
+		return
+	}
+
+	// Get upcoming events for the next 24 hours
+	events, err := s.database.GetUpcomingEvents(24)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to get events: "+err.Error())
+		return
+	}
+
+	// Send the daily brief via Chat API
+	if err := s.clients.Chat.SendDailyBrief(ctx, tasks, events); err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to send brief: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":       "sent",
+		"tasks_count":  len(tasks),
+		"events_count": len(events),
+	})
+}

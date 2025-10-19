@@ -13,6 +13,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
+	"google.golang.org/api/chat/v1"
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/option"
@@ -75,12 +76,18 @@ func NewClients(ctx context.Context, cfg *config.Config) (*Clients, error) {
 		return nil, fmt.Errorf("failed to create Tasks service: %w", err)
 	}
 
+	// Create Chat service
+	chatService, err := chat.NewService(ctx, option.WithHTTPClient(httpClient))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Chat service: %w", err)
+	}
+
 	return &Clients{
 		Gmail:    &GmailClient{Service: gmailService, Config: cfg},
 		Drive:    &DriveClient{Service: driveService, Config: cfg},
 		Calendar: &CalendarClient{Service: calendarService, Config: cfg},
 		Tasks:    &TasksClient{Service: tasksService, Config: cfg},
-		Chat:     &ChatClient{Config: cfg},
+		Chat:     &ChatClient{Service: chatService, Config: cfg, httpClient: httpClient},
 	}, nil
 }
 
