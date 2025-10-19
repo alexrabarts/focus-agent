@@ -19,6 +19,17 @@ import (
 	"github.com/alexrabarts/focus-agent/internal/db"
 )
 
+// Client is the interface for LLM operations
+type Client interface {
+	Close() error
+	SummarizeThread(ctx context.Context, messages []*db.Message) (string, error)
+	SummarizeThreadWithModelSelection(ctx context.Context, messages []*db.Message, metadata ThreadMetadata) (string, error)
+	ExtractTasks(ctx context.Context, content string) ([]*db.Task, error)
+	EvaluateStrategicAlignment(ctx context.Context, task *db.Task, priorities *config.Priorities) (*StrategicAlignmentResult, error)
+	DraftReply(ctx context.Context, thread []*db.Message, goal string) (string, error)
+	GenerateMeetingPrep(ctx context.Context, event *db.Event, relatedDocs []*db.Document) (string, error)
+}
+
 // GeminiClient handles Gemini API operations
 type GeminiClient struct {
 	client          *genai.Client

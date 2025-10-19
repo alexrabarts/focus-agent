@@ -23,7 +23,7 @@ type Scheduler struct {
 	cron     *cron.Cron
 	db       *db.DB
 	google   *google.Clients
-	llm      *llm.GeminiClient
+	llm      llm.Client
 	planner  *planner.Planner
 	config   *config.Config
 	jobs     map[string]cron.EntryID
@@ -32,7 +32,7 @@ type Scheduler struct {
 }
 
 // New creates a new scheduler
-func New(database *db.DB, googleClients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config) *Scheduler {
+func New(database *db.DB, googleClients *google.Clients, llmClient llm.Client, plannerService *planner.Planner, cfg *config.Config) *Scheduler {
 	// Create cron with timezone
 	location, err := time.LoadLocation(cfg.Schedule.Timezone)
 	if err != nil {

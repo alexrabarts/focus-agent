@@ -47,7 +47,7 @@ type Model struct {
 	// Dependencies
 	database  *db.DB
 	clients   *google.Clients
-	llm       *llm.GeminiClient
+	llm       llm.Client
 	planner   *planner.Planner
 	config    *config.Config
 	apiClient *APIClient
@@ -64,7 +64,7 @@ type Model struct {
 	logBuffer       *LogBuffer
 }
 
-func NewModel(database *db.DB, clients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config, logBuffer *LogBuffer) Model {
+func NewModel(database *db.DB, clients *google.Clients, llmClient llm.Client, plannerService *planner.Planner, cfg *config.Config, logBuffer *LogBuffer) Model {
 	// Initialize API client if remote mode is configured
 	var apiClient *APIClient
 	var sched *scheduler.Scheduler
@@ -345,7 +345,7 @@ func (m Model) formatLastRefresh() string {
 	}
 }
 
-func Start(database *db.DB, clients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config) error {
+func Start(database *db.DB, clients *google.Clients, llmClient llm.Client, plannerService *planner.Planner, cfg *config.Config) error {
 	// Create log buffer to capture background logs
 	logBuffer := NewLogBuffer(10) // Keep last 10 log messages
 

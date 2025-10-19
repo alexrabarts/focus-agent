@@ -24,14 +24,14 @@ type Scheduler interface {
 type Server struct {
 	database  *db.DB
 	clients   *google.Clients
-	llm       *llm.GeminiClient
+	llm       llm.Client
 	planner   *planner.Planner
 	scheduler Scheduler
 	config    *config.Config
 	server    *http.Server
 }
 
-func NewServer(database *db.DB, clients *google.Clients, llmClient *llm.GeminiClient, plannerService *planner.Planner, cfg *config.Config) *Server {
+func NewServer(database *db.DB, clients *google.Clients, llmClient llm.Client, plannerService *planner.Planner, cfg *config.Config) *Server {
 	return &Server{
 		database: database,
 		clients:  clients,

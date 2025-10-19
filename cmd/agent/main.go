@@ -100,8 +100,8 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Initialize LLM client
-	llmClient, err := llm.NewGeminiClient(cfg.Gemini.APIKey, database, cfg)
+	// Initialize Hybrid LLM client (Claude primary, Gemini fallback)
+	llmClient, err := llm.NewHybridClient(cfg.Gemini.APIKey, database, cfg)
 	if err != nil {
 		log.Fatalf("Failed to initialize LLM client: %v", err)
 	}
@@ -213,7 +213,7 @@ func main() {
 	time.Sleep(1 * time.Second)
 }
 
-func runSync(ctx context.Context, clients *google.Clients, database *db.DB, llm *llm.GeminiClient) error {
+func runSync(ctx context.Context, clients *google.Clients, database *db.DB, llm llm.Client) error {
 	log.Println("╔═══════════════════════════════════════════════════════╗")
 	log.Println("║           STARTING FULL SYNC                          ║")
 	log.Println("╚═══════════════════════════════════════════════════════╝")

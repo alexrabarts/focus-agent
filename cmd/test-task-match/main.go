@@ -40,7 +40,7 @@ func main() {
 		log.Fatalf("Failed to initialize Google clients: %v", err)
 	}
 
-	llmClient, err := llm.NewGeminiClient(cfg.Gemini.APIKey, database, cfg)
+	llmClient, err := llm.NewHybridClient(cfg.Gemini.APIKey, database, cfg)
 	if err != nil {
 		log.Fatalf("Failed to initialize LLM client: %v", err)
 	}

@@ -18,12 +18,12 @@ import (
 type Planner struct {
 	db     *db.DB
 	google *google.Clients
-	llm    *llm.GeminiClient
+	llm    llm.Client
 	config *config.Config
 }
 
 // New creates a new planner
-func New(database *db.DB, googleClients *google.Clients, llmClient *llm.GeminiClient, cfg *config.Config) *Planner {
+func New(database *db.DB, googleClients *google.Clients, llmClient llm.Client, cfg *config.Config) *Planner {
 	return &Planner{
 		db:     database,
 		google: googleClients,
