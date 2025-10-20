@@ -29,6 +29,9 @@ const (
 // tickMsg is sent when it's time to refresh
 type tickMsg struct{}
 
+// renderTickMsg is sent every second to update the timestamp display
+type renderTickMsg struct{}
+
 // tick returns a command that sends a tickMsg after the configured interval
 func tick(cfg *config.Config) tea.Cmd {
 	if cfg.TUI.AutoRefreshSeconds <= 0 {
@@ -36,6 +39,13 @@ func tick(cfg *config.Config) tea.Cmd {
 	}
 	return tea.Tick(time.Duration(cfg.TUI.AutoRefreshSeconds)*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg{}
+	})
+}
+
+// renderTick returns a command that sends a renderTickMsg every second
+func renderTick() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return renderTickMsg{}
 	})
 }
 
@@ -100,7 +110,8 @@ func (m Model) Init() tea.Cmd {
 		m.statsModel.fetchStats(),
 		m.queueModel.fetchQueue(),
 		m.threadsModel.fetchThreads(),
-		tick(m.config), // Start auto-refresh ticker
+		tick(m.config),  // Start auto-refresh ticker
+		renderTick(),    // Start render ticker for timestamp updates
 	)
 }
 
@@ -135,6 +146,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statsModel.fetchStats(), // Always refresh stats for footer queue count
 			tick(m.config),
 		)
+
+	case renderTickMsg:
+		// Just schedule the next render tick - this triggers a re-render to update the timestamp
+		return m, renderTick()
 
 	case tea.KeyMsg:
 		// Check if priorities view is in input mode
@@ -329,11 +344,14 @@ func (m Model) formatLastRefresh() string {
 
 	elapsed := time.Since(m.lastRefreshTime)
 
-	if elapsed < 5*time.Second {
+	if elapsed < 30*time.Second {
+		// Show "just now" for the first 30 seconds (normal refresh interval)
 		return "Updated: just now"
 	} else if elapsed < time.Minute {
+		// Show seconds from 30-59 seconds (indicates a delay)
 		return fmt.Sprintf("Updated: %ds ago", int(elapsed.Seconds()))
 	} else if elapsed < time.Hour {
+		// After 1 minute, round to minutes
 		mins := int(elapsed.Minutes())
 		return fmt.Sprintf("Updated: %dm ago", mins)
 	} else if elapsed < 24*time.Hour {
