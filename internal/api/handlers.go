@@ -23,6 +23,8 @@ type TaskResponse struct {
 	Stakeholder string  `json:"stakeholder"`
 	Score       float64 `json:"score"`
 	Status      string  `json:"status"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
 }
 
 // Priorities response structure
@@ -120,6 +122,8 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			Stakeholder: task.Stakeholder,
 			Score:       task.Score,
 			Status:      task.Status,
+			CreatedAt:   task.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:   task.UpdatedAt.Format(time.RFC3339),
 		})
 	}
 
