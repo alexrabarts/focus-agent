@@ -18,6 +18,9 @@
 - Go module: `github.com/alexrabarts/focus-agent`
 - Binary: `focus-agent`
 - Config directory: `~/.focus-agent`
+- Database: DuckDB (NOT SQLite) at `~/.focus-agent/focus.db`
+  - Currently using DuckDB v1.4.1 via `github.com/marcboeker/go-duckdb/v2`
+  - Upgraded from v1.1.3 to fix UPDATE constraint errors on indexed columns
 
 ## Recent Changes
 
