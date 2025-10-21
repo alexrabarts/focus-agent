@@ -25,6 +25,7 @@ type Client interface {
 	SummarizeThread(ctx context.Context, messages []*db.Message) (string, error)
 	SummarizeThreadWithModelSelection(ctx context.Context, messages []*db.Message, metadata ThreadMetadata) (string, error)
 	ExtractTasks(ctx context.Context, content string) ([]*db.Task, error)
+	EnrichTaskDescription(ctx context.Context, task *db.Task, messages []*db.Message) (string, error)
 	EvaluateStrategicAlignment(ctx context.Context, task *db.Task, priorities *config.Priorities) (*StrategicAlignmentResult, error)
 	DraftReply(ctx context.Context, thread []*db.Message, goal string) (string, error)
 	GenerateMeetingPrep(ctx context.Context, event *db.Event, relatedDocs []*db.Document) (string, error)
@@ -683,6 +684,53 @@ func (g *GeminiClient) GenerateMeetingPrep(ctx context.Context, event *db.Event,
 	return prep, nil
 }
 
+// EnrichTaskDescription generates a rich, contextual description for a task based on email thread
+func (g *GeminiClient) EnrichTaskDescription(ctx context.Context, task *db.Task, messages []*db.Message) (string, error) {
+	prompt := g.buildTaskEnrichmentPrompt(task, messages)
+
+	// Check cache
+	hash := g.hashPrompt(prompt)
+	cached, err := g.db.GetCachedResponse(hash)
+	if err == nil && cached != nil {
+		log.Printf("Using cached task enrichment")
+		return cached.Response, nil
+	}
+
+	// Wait for rate limit
+	if err := g.rateLimiter.Wait(ctx); err != nil {
+		return "", fmt.Errorf("rate limiter error: %w", err)
+	}
+
+	// Generate enriched description with retry
+	startTime := time.Now()
+	resp, err := g.generateWithRetry(ctx, genai.Text(prompt))
+	if err != nil {
+		g.db.LogUsage("gemini", "enrich_task", 0, 0, time.Since(startTime), err)
+		return "", fmt.Errorf("failed to enrich task description: %w", err)
+	}
+
+	// Extract text
+	enrichedDesc := g.extractText(resp)
+
+	// Calculate usage
+	tokens := g.estimateTokens(prompt + enrichedDesc)
+	cost := g.calculateCost(tokens)
+	g.db.LogUsage("gemini", "enrich_task", tokens, cost, time.Since(startTime), nil)
+
+	// Cache response
+	cache := &db.LLMCache{
+		Hash:      hash,
+		Prompt:    prompt,
+		Response:  enrichedDesc,
+		Model:     "gemini-1.5-flash",
+		Tokens:    tokens,
+		ExpiresAt: time.Now().Add(g.cacheTTL),
+	}
+	g.db.SaveCachedResponse(cache)
+
+	return enrichedDesc, nil
+}
+
 // buildThreadSummaryPrompt creates a prompt for thread summarization
 func (g *GeminiClient) buildThreadSummaryPrompt(messages []*db.Message) string {
 	var prompt strings.Builder
@@ -865,6 +913,85 @@ func (g *GeminiClient) buildStrategicAlignmentPrompt(task *db.Task, priorities *
 	prompt.WriteString("- focus_areas: array of Focus Area names that align (empty array if none)\n")
 	prompt.WriteString("- projects: array of Project names that align (empty array if none)\n")
 	prompt.WriteString("- reasoning: brief explanation of your evaluation (include why you excluded matches if any)\n")
+
+	return prompt.String()
+}
+
+// buildTaskEnrichmentPrompt creates a prompt for enriching task descriptions with context
+func (g *GeminiClient) buildTaskEnrichmentPrompt(task *db.Task, messages []*db.Message) string {
+	var prompt strings.Builder
+
+	prompt.WriteString("You are helping enrich a task description with full context from an email thread.\n\n")
+
+	prompt.WriteString("TASK TO ENRICH:\n")
+	prompt.WriteString(fmt.Sprintf("Title: %s\n", task.Title))
+	if task.Description != "" {
+		prompt.WriteString(fmt.Sprintf("Current Description: %s\n", task.Description))
+	}
+	if task.DueTS != nil {
+		prompt.WriteString(fmt.Sprintf("Due Date: %s\n", task.DueTS.Format("Jan 2, 2006")))
+	}
+	if task.Project != "" {
+		prompt.WriteString(fmt.Sprintf("Project: %s\n", task.Project))
+	}
+	prompt.WriteString("\n")
+
+	prompt.WriteString("EMAIL THREAD CONTEXT:\n")
+	// Show most recent messages first, limit to last 10 for context
+	start := 0
+	if len(messages) > 10 {
+		start = len(messages) - 10
+	}
+	for i := len(messages) - 1; i >= start; i-- {
+		msg := messages[i]
+		prompt.WriteString(fmt.Sprintf("\n--- Message from %s (%s) ---\n", msg.From, msg.Timestamp.Format("Jan 2, 3:04 PM")))
+		prompt.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
+		// Use snippet if available, otherwise truncate body
+		if msg.Snippet != "" && msg.Snippet != msg.Body {
+			prompt.WriteString(fmt.Sprintf("Content: %s\n", msg.Snippet))
+		} else if msg.Body != "" {
+			body := msg.Body
+			if len(body) > 500 {
+				body = body[:500] + "..."
+			}
+			prompt.WriteString(fmt.Sprintf("Content: %s\n", body))
+		}
+	}
+	prompt.WriteString("\n")
+
+	prompt.WriteString("INSTRUCTIONS:\n")
+	prompt.WriteString("Write a rich, contextual description (2-4 sentences) that captures:\n\n")
+	prompt.WriteString("1. WHAT is being asked for and WHY it matters\n")
+	prompt.WriteString("   - The specific deliverable or action needed\n")
+	prompt.WriteString("   - The business context or problem it addresses\n")
+	prompt.WriteString("   - Why this is important right now\n\n")
+
+	prompt.WriteString("2. WHO is involved and their role\n")
+	prompt.WriteString("   - Who requested this (name and role if mentioned)\n")
+	prompt.WriteString("   - Who else is involved or affected\n")
+	prompt.WriteString("   - Any stakeholder concerns or expectations\n\n")
+
+	prompt.WriteString("3. WHEN and timeline context\n")
+	prompt.WriteString("   - Specific deadline if mentioned\n")
+	prompt.WriteString("   - Reason for the timeline (e.g., 'for board meeting', 'before launch')\n")
+	prompt.WriteString("   - Any time-sensitivity or urgency drivers\n\n")
+
+	prompt.WriteString("4. HOW this connects to broader work\n")
+	prompt.WriteString("   - Related projects or initiatives\n")
+	prompt.WriteString("   - Dependencies or prerequisites\n")
+	prompt.WriteString("   - Expected outcomes or success criteria\n\n")
+
+	prompt.WriteString("STYLE GUIDELINES:\n")
+	prompt.WriteString("- Write in clear, professional language\n")
+	prompt.WriteString("- Be specific with names, dates, numbers, and concrete details\n")
+	prompt.WriteString("- Focus on actionable context that helps prioritize and execute\n")
+	prompt.WriteString("- Avoid speculation - only include information from the thread\n")
+	prompt.WriteString("- Keep it concise: 2-4 sentences maximum\n\n")
+
+	prompt.WriteString("EXAMPLE OUTPUT:\n")
+	prompt.WriteString("\"Sarah Chen (VP Finance) requested a detailed review of Q3 budget variances by Friday EOB for the board meeting. She's particularly concerned about the 12% overspend in APAC marketing and needs specific recommendations on cost optimization opportunities to present to the board. This connects to our Q4 profitability targets and may affect the marketing automation project timeline.\"\n\n")
+
+	prompt.WriteString("Now write the enriched description (2-4 sentences only, no preamble):\n")
 
 	return prompt.String()
 }

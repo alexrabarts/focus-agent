@@ -366,12 +366,22 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 		return fmt.Errorf("failed to save thread summary: %w", err)
 	}
 
-	// Save extracted tasks
+	// Enrich and save extracted tasks
 	for _, task := range tasks {
 		// Set source to gmail for email-extracted tasks
 		task.Source = "gmail"
 		// Set source_id to thread ID so we can link tasks to threads
 		task.SourceID = threadID
+
+		// Enrich task description with full context from email thread
+		if enrichedDesc, err := s.llm.EnrichTaskDescription(s.ctx, task, messages); err == nil {
+			task.Description = enrichedDesc
+			log.Printf("Enriched task description: %s -> %s", task.Title, enrichedDesc[:min(100, len(enrichedDesc))])
+		} else {
+			log.Printf("Failed to enrich task description: %v", err)
+			// Continue with original task if enrichment fails
+		}
+
 		if err := s.db.SaveTask(task); err != nil {
 			log.Printf("Failed to save extracted task: %v", err)
 		}
@@ -553,18 +563,27 @@ func (s *Scheduler) ProcessNewMessages() {
 			log.Printf("Failed to save thread summary: %v", err)
 		}
 
-		// Save extracted tasks
+		// Enrich and save extracted tasks
 		for _, task := range tasks {
 			// Set source to gmail for email-extracted tasks
 			task.Source = "gmail"
 			// Set source_id to thread ID so we can link tasks to threads
 			task.SourceID = threadID
+
+			// Enrich task description with full context from email thread
+			if enrichedDesc, err := s.llm.EnrichTaskDescription(s.ctx, task, messages); err == nil {
+				task.Description = enrichedDesc
+			} else {
+				log.Printf("Failed to enrich task description: %v", err)
+				// Continue with original task if enrichment fails
+			}
+
 			if err := s.db.SaveTask(task); err != nil {
 				log.Printf("Failed to save extracted task: %v", err)
 			}
 		}
 
-		log.Printf("Processed thread %s: summary generated, %d tasks extracted", threadID, len(tasks))
+		log.Printf("Processed thread %s: summary generated, %d tasks extracted and enriched", threadID, len(tasks))
 		successCount++
 
 		// Show progress every 10 threads

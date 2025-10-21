@@ -178,6 +178,48 @@ func (h *HybridClient) ExtractTasks(ctx context.Context, content string) ([]*db.
 	return h.gemini.ExtractTasks(ctx, content)
 }
 
+// EnrichTaskDescription generates rich contextual descriptions (Claude primary, Gemini fallback)
+func (h *HybridClient) EnrichTaskDescription(ctx context.Context, task *db.Task, messages []*db.Message) (string, error) {
+	// Build prompt
+	prompt := h.gemini.buildTaskEnrichmentPrompt(task, messages)
+
+	// Check cache
+	hash := h.gemini.hashPrompt(prompt)
+	cached, err := h.db.GetCachedResponse(hash)
+	if err == nil && cached != nil {
+		log.Printf("Using cached task enrichment")
+		return cached.Response, nil
+	}
+
+	// Try Claude CLI first
+	startTime := time.Now()
+	enrichedDesc, err := h.callClaude(ctx, prompt)
+	if err == nil {
+		log.Printf("✓ Claude CLI succeeded for EnrichTaskDescription (%.2fs)", time.Since(startTime).Seconds())
+
+		// Cache the response
+		tokens := h.gemini.estimateTokens(prompt + enrichedDesc)
+		cache := &db.LLMCache{
+			Hash:      hash,
+			Prompt:    prompt,
+			Response:  enrichedDesc,
+			Model:     "claude-haiku",
+			Tokens:    tokens,
+			ExpiresAt: time.Now().Add(h.gemini.cacheTTL),
+		}
+		h.db.SaveCachedResponse(cache)
+
+		// Log usage
+		h.db.LogUsage("claude", "enrich_task", tokens, 0, time.Since(startTime), nil)
+
+		return enrichedDesc, nil
+	}
+
+	// Fallback to Gemini
+	log.Printf("⚠ Claude CLI failed, falling back to Gemini: %v", err)
+	return h.gemini.EnrichTaskDescription(ctx, task, messages)
+}
+
 // EvaluateStrategicAlignment evaluates strategic alignment (Claude primary, Gemini fallback)
 func (h *HybridClient) EvaluateStrategicAlignment(ctx context.Context, task *db.Task, priorities *config.Priorities) (*StrategicAlignmentResult, error) {
 	// Build prompt
