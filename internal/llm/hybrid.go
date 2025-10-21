@@ -28,11 +28,17 @@ func NewHybridClient(geminiAPIKey string, database *db.DB, cfg *config.Config) (
 		return nil, fmt.Errorf("failed to create Gemini fallback client: %w", err)
 	}
 
-	// Find claude CLI
-	claudePath, err := exec.LookPath("claude")
-	if err != nil {
-		log.Printf("Warning: claude CLI not found, will use Gemini only: %v", err)
-		claudePath = ""
+	// Find claude CLI - try full path first, then PATH
+	claudePath := "/home/alex/.claude/local/claude"
+	if _, err := exec.LookPath(claudePath); err != nil {
+		// Try finding in PATH as fallback
+		claudePath, err = exec.LookPath("claude")
+		if err != nil {
+			log.Printf("Warning: claude CLI not found, will use Gemini only: %v", err)
+			claudePath = ""
+		} else {
+			log.Printf("Claude CLI found at: %s", claudePath)
+		}
 	} else {
 		log.Printf("Claude CLI found at: %s", claudePath)
 	}
