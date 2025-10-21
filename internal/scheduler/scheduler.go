@@ -282,14 +282,17 @@ func (s *Scheduler) checkFollowUps() {
 
 // prioritizeTasks recalculates task priorities
 func (s *Scheduler) prioritizeTasks() {
-	log.Println("Prioritizing tasks...")
+	// Run in goroutine to avoid blocking the scheduler and API handlers
+	go func() {
+		log.Println("Prioritizing tasks...")
 
-	if err := s.planner.PrioritizeTasks(s.ctx); err != nil {
-		log.Printf("Failed to prioritize tasks: %v", err)
-		s.db.LogUsage("planner", "prioritize", 0, 0, 0, err)
-	} else {
-		log.Println("Task prioritization completed")
-	}
+		if err := s.planner.PrioritizeTasks(s.ctx); err != nil {
+			log.Printf("Failed to prioritize tasks: %v", err)
+			s.db.LogUsage("planner", "prioritize", 0, 0, 0, err)
+		} else {
+			log.Println("Task prioritization completed")
+		}
+	}()
 }
 
 // ProcessSingleThread processes a single thread with AI
