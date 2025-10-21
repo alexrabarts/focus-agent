@@ -44,6 +44,8 @@ type TaskResponse struct {
 	Stakeholder string  `json:"stakeholder"`
 	Score       float64 `json:"score"`
 	Status      string  `json:"status"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
 }
 
 // PrioritiesResponse matches the API response structure
@@ -171,6 +173,10 @@ func (c *APIClient) GetTasks() ([]*db.Task, error) {
 			}
 		}
 
+		// Parse timestamps
+		createdAt, _ := time.Parse(time.RFC3339, t.CreatedAt)
+		updatedAt, _ := time.Parse(time.RFC3339, t.UpdatedAt)
+
 		result = append(result, &db.Task{
 			ID:          t.ID,
 			Source:      t.Source,
@@ -185,6 +191,8 @@ func (c *APIClient) GetTasks() ([]*db.Task, error) {
 			Stakeholder: t.Stakeholder,
 			Score:       t.Score,
 			Status:      t.Status,
+			CreatedAt:   createdAt,
+			UpdatedAt:   updatedAt,
 		})
 	}
 
