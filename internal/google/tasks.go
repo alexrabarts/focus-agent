@@ -160,20 +160,35 @@ func (t *TasksClient) processTask(ctx context.Context, database *db.DB, task *ta
 		}
 	}
 
+	// Parse updated timestamp from Google Tasks
+	var updatedTS *time.Time
+	if task.Updated != "" {
+		updated, err := time.Parse(time.RFC3339, task.Updated)
+		if err == nil {
+			updatedTS = &updated
+		}
+	}
+
 	// Create task record
 	taskRecord := &db.Task{
 		ID:          fmt.Sprintf("gtask_%s", task.Id),
 		Source:      "gtasks",
 		SourceID:    task.Id,
 		Title:       task.Title,
-		Description: task.Notes,
+		Description:task.Notes,
 		DueTS:       dueTS,
 		Project:     listName,
 		Impact:      3, // Default medium impact
 		Urgency:     urgency,
 		Effort:      "M", // Default medium effort
 		Status:      status,
-		Metadata:    fmt.Sprintf(`{"list":"%s","position":"%s"}`, listName, task.Position),
+		Metadata:    fmt.Sprintf(`{"list":"%s","position":"%s","updated":"%s"}`, listName, task.Position, task.Updated),
+		UpdatedAt:   time.Now(), // Will be set by SaveTask if not already set
+	}
+
+	// Use Google Tasks updated timestamp as created_at for new tasks
+	if updatedTS != nil {
+		taskRecord.CreatedAt = *updatedTS
 	}
 
 	// Save to database

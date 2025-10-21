@@ -196,11 +196,22 @@ func (db *DB) SaveTask(task *Task) error {
 		completedTS = &ts
 	}
 
+	// Set created_at if not already set (zero value)
+	now := time.Now()
+	if task.CreatedAt.IsZero() {
+		task.CreatedAt = now
+	}
+	createdTS := task.CreatedAt.Unix()
+
+	// Always update updated_at
+	task.UpdatedAt = now
+	updatedTS := task.UpdatedAt.Unix()
+
 	// Note: DuckDB doesn't allow updating indexed columns in ON CONFLICT DO UPDATE
 	// Indexed columns: status, due_ts, score, source, source_id
 	query := `
-		INSERT INTO tasks (id, source, source_id, title, description, due_ts, project, impact, urgency, effort, stakeholder, score, status, metadata, completed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO tasks (id, source, source_id, title, description, due_ts, project, impact, urgency, effort, stakeholder, score, status, metadata, completed_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			title = excluded.title,
 			description = excluded.description,
@@ -210,13 +221,14 @@ func (db *DB) SaveTask(task *Task) error {
 			effort = excluded.effort,
 			stakeholder = excluded.stakeholder,
 			metadata = excluded.metadata,
-			completed_at = excluded.completed_at
+			completed_at = excluded.completed_at,
+			updated_at = excluded.updated_at
 	`
 
 	_, err := db.Exec(query,
 		task.ID, task.Source, task.SourceID, task.Title, task.Description, dueTS,
 		task.Project, task.Impact, task.Urgency, task.Effort, task.Stakeholder,
-		task.Score, task.Status, task.Metadata, completedTS,
+		task.Score, task.Status, task.Metadata, completedTS, createdTS, updatedTS,
 	)
 	return err
 }
