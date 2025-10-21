@@ -30,6 +30,7 @@ var (
 	apiMode         = flag.Bool("api", false, "Run API server with scheduler (for remote TUI access)")
 	tuiMode         = flag.Bool("tui", false, "Run interactive TUI (Terminal User Interface)")
 	reprocessTasks      = flag.Bool("reprocess-tasks", false, "Re-extract tasks from existing thread summaries with updated parser")
+	enrichTasks         = flag.Bool("enrich-tasks", false, "Enrich descriptions for existing email-extracted tasks with AI context")
 	cleanupOthers       = flag.Bool("cleanup-other-tasks", false, "Delete tasks assigned to other people (one-time cleanup)")
 	recalculatePriorities = flag.Bool("recalculate-priorities", false, "Recalculate priority scores and populate matched priorities for all pending tasks")
 	migrateToDuckDB     = flag.String("migrate-to-duckdb", "", "Migrate SQLite database to DuckDB (provide new DuckDB path)")
@@ -134,6 +135,16 @@ func main() {
 		sched := scheduler.New(database, googleClients, llmClient, plannerService, cfg)
 		if err := sched.ReprocessAITasks(); err != nil {
 			log.Fatalf("Failed to reprocess tasks: %v", err)
+		}
+		os.Exit(0)
+	}
+
+	// Handle enrich-tasks mode
+	if *enrichTasks {
+		log.Println("Enriching descriptions for existing email-extracted tasks...")
+		sched := scheduler.New(database, googleClients, llmClient, plannerService, cfg)
+		if err := sched.EnrichExistingTasks(); err != nil {
+			log.Fatalf("Failed to enrich tasks: %v", err)
 		}
 		os.Exit(0)
 	}

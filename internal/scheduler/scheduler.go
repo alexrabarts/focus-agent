@@ -615,6 +615,167 @@ func (s *Scheduler) ProcessNewMessages() {
 	log.Println("═══════════════════════════════════════════════════════")
 }
 
+// EnrichExistingTasks enriches descriptions for existing email-extracted tasks
+func (s *Scheduler) EnrichExistingTasks() error {
+	log.Println("Finding email-extracted tasks that need enrichment...")
+
+	// Query tasks from gmail source that have no description or short descriptions
+	query := `
+		SELECT id, source, source_id, title, description, project, due_ts
+		FROM tasks
+		WHERE source = 'gmail'
+		  AND status = 'pending'
+		  AND (description IS NULL OR description = '' OR LENGTH(description) < 50)
+		ORDER BY created_at DESC
+		LIMIT 100
+	`
+
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return fmt.Errorf("failed to query tasks: %w", err)
+	}
+	defer rows.Close()
+
+	type taskInfo struct {
+		task     *db.Task
+		threadID string
+	}
+
+	var tasksToEnrich []taskInfo
+	for rows.Next() {
+		task := &db.Task{}
+		var dueTS sql.NullInt64
+		var description sql.NullString
+
+		err := rows.Scan(&task.ID, &task.Source, &task.SourceID,
+			&task.Title, &description, &task.Project, &dueTS)
+		if err != nil {
+			log.Printf("Failed to scan task: %v", err)
+			continue
+		}
+
+		if description.Valid {
+			task.Description = description.String
+		}
+		if dueTS.Valid {
+			due := time.Unix(dueTS.Int64, 0)
+			task.DueTS = &due
+		}
+
+		tasksToEnrich = append(tasksToEnrich, taskInfo{
+			task:     task,
+			threadID: task.SourceID, // For gmail tasks, source_id is the thread ID
+		})
+	}
+
+	if len(tasksToEnrich) == 0 {
+		log.Println("No tasks found that need enrichment")
+		return nil
+	}
+
+	log.Printf("Found %d tasks to enrich", len(tasksToEnrich))
+
+	// Estimate cost
+	estimatedTokensPerTask := 700 // Higher than normal processing due to full thread context
+	totalEstimatedTokens := len(tasksToEnrich) * estimatedTokensPerTask
+	estimatedCost := float64(totalEstimatedTokens) * 0.0000002
+
+	log.Println("═══════════════════════════════════════════════════════")
+	log.Printf("🤖 TASK ENRICHMENT ESTIMATE:")
+	log.Printf("   Tasks to enrich: %d", len(tasksToEnrich))
+	log.Printf("   Estimated tokens: ~%d tokens", totalEstimatedTokens)
+	log.Printf("   Estimated cost: ~$%.4f", estimatedCost)
+	log.Println("═══════════════════════════════════════════════════════")
+
+	successCount := 0
+	startTime := time.Now()
+
+	// Process each task
+	for i, info := range tasksToEnrich {
+		log.Printf("Enriching task %d/%d: %s", i+1, len(tasksToEnrich), info.task.Title)
+
+		// Get messages for the thread
+		messagesQuery := `
+			SELECT id, thread_id, from_addr, to_addr, subject, snippet, body, ts
+			FROM messages
+			WHERE thread_id = ?
+			ORDER BY ts DESC
+			LIMIT 20
+		`
+
+		msgRows, err := s.db.Query(messagesQuery, info.threadID)
+		if err != nil {
+			log.Printf("Failed to get messages for thread %s: %v", info.threadID, err)
+			continue
+		}
+
+		var messages []*db.Message
+		for msgRows.Next() {
+			msg := &db.Message{}
+			var ts int64
+			err := msgRows.Scan(&msg.ID, &msg.ThreadID, &msg.From, &msg.To,
+				&msg.Subject, &msg.Snippet, &msg.Body, &ts)
+			if err != nil {
+				continue
+			}
+			msg.Timestamp = time.Unix(ts, 0)
+			messages = append(messages, msg)
+		}
+		msgRows.Close()
+
+		if len(messages) == 0 {
+			log.Printf("No messages found for thread %s, skipping", info.threadID)
+			continue
+		}
+
+		// Enrich the task description
+		enrichedDesc, err := s.llm.EnrichTaskDescription(s.ctx, info.task, messages)
+		if err != nil {
+			log.Printf("Failed to enrich task %s: %v", info.task.ID, err)
+			continue
+		}
+
+		// Update the task
+		info.task.Description = enrichedDesc
+		if err := s.db.SaveTask(info.task); err != nil {
+			log.Printf("Failed to save enriched task: %v", err)
+			continue
+		}
+
+		log.Printf("✓ Enriched: %s", enrichedDesc[:min(100, len(enrichedDesc))])
+		successCount++
+
+		// Show progress every 10 tasks
+		if (i+1)%10 == 0 {
+			elapsed := time.Since(startTime)
+			remaining := len(tasksToEnrich) - (i + 1)
+			estimatedTimeLeft := time.Duration(float64(elapsed)/float64(i+1)*float64(remaining))
+			avgTimePerTask := elapsed / time.Duration(i+1)
+			log.Printf("Progress: %d/%d tasks | Elapsed: %v | Avg: %v/task | Est. remaining: %v",
+				i+1, len(tasksToEnrich), elapsed.Round(time.Second), avgTimePerTask.Round(time.Second), estimatedTimeLeft.Round(time.Second))
+		}
+	}
+
+	// Final summary
+	elapsed := time.Since(startTime)
+
+	// Get actual token usage from database
+	var totalTokens int
+	var totalCost float64
+	usageQuery := `SELECT SUM(tokens), SUM(cost) FROM usage WHERE ts >= ?`
+	s.db.QueryRow(usageQuery, startTime.Unix()).Scan(&totalTokens, &totalCost)
+
+	log.Println("═══════════════════════════════════════════════════════")
+	log.Printf("✅ TASK ENRICHMENT COMPLETE:")
+	log.Printf("   Successfully enriched: %d/%d tasks", successCount, len(tasksToEnrich))
+	log.Printf("   Total time: %v", elapsed.Round(time.Second))
+	log.Printf("   Actual tokens used: %d", totalTokens)
+	log.Printf("   Actual cost: $%.4f", totalCost)
+	log.Println("═══════════════════════════════════════════════════════")
+
+	return nil
+}
+
 // cleanupCache cleans expired cache entries
 func (s *Scheduler) cleanupCache() {
 	log.Println("Cleaning up expired cache...")
