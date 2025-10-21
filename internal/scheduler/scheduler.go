@@ -621,7 +621,8 @@ func (s *Scheduler) EnrichExistingTasks() error {
 
 	// Query tasks from gmail source that have no description or short descriptions
 	query := `
-		SELECT id, source, source_id, title, description, project, due_ts
+		SELECT id, source, source_id, title, description, project, due_ts,
+		       impact, urgency, effort, stakeholder, score, status
 		FROM tasks
 		WHERE source = 'gmail'
 		  AND status = 'pending'
@@ -648,7 +649,9 @@ func (s *Scheduler) EnrichExistingTasks() error {
 		var description sql.NullString
 
 		err := rows.Scan(&task.ID, &task.Source, &task.SourceID,
-			&task.Title, &description, &task.Project, &dueTS)
+			&task.Title, &description, &task.Project, &dueTS,
+			&task.Impact, &task.Urgency, &task.Effort, &task.Stakeholder,
+			&task.Score, &task.Status)
 		if err != nil {
 			log.Printf("Failed to scan task: %v", err)
 			continue
