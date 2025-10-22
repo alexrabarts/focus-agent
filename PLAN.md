@@ -115,7 +115,30 @@ Sync AI-generated tasks with Google Tasks for better cross-platform task managem
 
 ---
 
+### Multi-User Google Chat Support
+**Priority:** Low
+**Status:** Planned
+
+Enable Focus Agent to operate as a shared Chat app across multiple Google Workspace users while keeping data and automations isolated per account.
+
+**Key Workstreams:**
+1. Extend OAuth onboarding to capture and persist per-user credentials plus authorized email metadata.
+2. Store per-user DM space mappings (space ID, thread keys) in the database and update Chat client to resolve per request.
+3. Refactor scheduler and planner workflows to run within a user context (tasks, briefs, follow-ups).
+4. Implement per-user command handling and outbound rate limiting.
+5. Add admin tooling to invite/remove users and monitor usage.
+
+**Considerations:** quota impact, background job isolation, revocation flows, and migration path from the current single-user configuration.
+
+---
+
 ## Ideas / Backlog
+
+### Fix Google Chat Hyperlinks
+**Priority:** Medium
+**Status:** Known Issue
+
+Ensure daily brief source links render correctly inside Google Chat messages. Current markdown formatting renders as literal text. Investigate Chat markdown/link rules, adjust formatting, and update testing to confirm clickable links in both text and card messages.
 
 ### Granola Meeting Transcription Integration
 Integrate with Granola (or similar meeting transcription tools) and Gemini to automatically extract tasks from meeting summaries.

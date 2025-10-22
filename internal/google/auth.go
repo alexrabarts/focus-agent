@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -56,6 +57,17 @@ func NewClients(ctx context.Context, cfg *config.Config) (*Clients, error) {
 	gmailService, err := gmail.NewService(ctx, option.WithHTTPClient(httpClient))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Gmail service: %w", err)
+	}
+
+	// Capture the authenticated user's email address for downstream services
+	if cfg.Google.UserEmail == "" {
+		profile, err := gmailService.Users.GetProfile("me").Context(ctx).Do()
+		if err != nil {
+			log.Printf("WARNING: failed to retrieve Gmail profile for user identification: %v", err)
+		} else if profile != nil && profile.EmailAddress != "" {
+			cfg.Google.UserEmail = strings.ToLower(profile.EmailAddress)
+			log.Printf("Detected authenticated Google Workspace user: %s", cfg.Google.UserEmail)
+		}
 	}
 
 	// Create Drive service

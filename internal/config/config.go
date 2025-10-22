@@ -55,9 +55,9 @@ type Gemini struct {
 }
 
 type Chat struct {
-	WebhookURL     string `yaml:"webhook_url"`
-	SpaceID        string `yaml:"space_id"`
-	ThreadKey      string `yaml:"thread_key"`
+	WebhookURL string `yaml:"webhook_url"`
+	SpaceID    string `yaml:"space_id"`
+	ThreadKey  string `yaml:"thread_key"`
 }
 
 type API struct {
@@ -76,10 +76,10 @@ type TUI struct {
 }
 
 type Schedule struct {
-	DailyBriefTime  string `yaml:"daily_brief_time"`  // "07:45"
-	ReplanTime      string `yaml:"replan_time"`       // "13:00"
-	FollowUpMinutes int    `yaml:"followup_minutes"`   // 60
-	Timezone        string `yaml:"timezone"`           // "America/Los_Angeles"
+	DailyBriefTime  string `yaml:"daily_brief_time"` // "07:45"
+	ReplanTime      string `yaml:"replan_time"`      // "13:00"
+	FollowUpMinutes int    `yaml:"followup_minutes"` // 60
+	Timezone        string `yaml:"timezone"`         // "America/Los_Angeles"
 }
 
 type Planner struct {
@@ -95,20 +95,20 @@ type Planner struct {
 
 type Limits struct {
 	// Gmail limits
-	MaxThreadsPerSync       int  `yaml:"max_threads_per_sync"`
-	MaxAIProcessingPerRun   int  `yaml:"max_ai_processing_per_run"`
-	UnreadOnly              bool `yaml:"unread_only"`
-	DaysOfHistory           int  `yaml:"days_of_history"`
+	MaxThreadsPerSync     int  `yaml:"max_threads_per_sync"`
+	MaxAIProcessingPerRun int  `yaml:"max_ai_processing_per_run"`
+	UnreadOnly            bool `yaml:"unread_only"`
+	DaysOfHistory         int  `yaml:"days_of_history"`
 
 	// Drive limits
-	MaxDocumentsPerSync     int  `yaml:"max_documents_per_sync"`
-	DriveDaysOfHistory      int  `yaml:"drive_days_of_history"`
+	MaxDocumentsPerSync int `yaml:"max_documents_per_sync"`
+	DriveDaysOfHistory  int `yaml:"drive_days_of_history"`
 
 	// Calendar limits
-	CalendarDaysAhead       int  `yaml:"calendar_days_ahead"`
+	CalendarDaysAhead int `yaml:"calendar_days_ahead"`
 
 	// Tasks limits
-	MaxTaskLists            int  `yaml:"max_task_lists"`
+	MaxTaskLists int `yaml:"max_task_lists"`
 }
 
 type Priorities struct {
@@ -179,12 +179,27 @@ func applyDefaults(cfg *Config) {
 		cfg.Google.TokenFile = os.ExpandEnv("$HOME/.focus-agent/token.json")
 	}
 
+	requiredScopes := []string{
+		"https://www.googleapis.com/auth/gmail.readonly",
+		"https://www.googleapis.com/auth/drive.readonly",
+		"https://www.googleapis.com/auth/calendar.readonly",
+		"https://www.googleapis.com/auth/tasks.readonly",
+		"https://www.googleapis.com/auth/chat.messages",
+		"https://www.googleapis.com/auth/chat.spaces.readonly",
+		"https://www.googleapis.com/auth/chat.memberships.readonly",
+	}
+
 	if len(cfg.Google.Scopes) == 0 {
-		cfg.Google.Scopes = []string{
-			"https://www.googleapis.com/auth/gmail.readonly",
-			"https://www.googleapis.com/auth/drive.readonly",
-			"https://www.googleapis.com/auth/calendar.readonly",
-			"https://www.googleapis.com/auth/tasks.readonly",
+		cfg.Google.Scopes = append([]string{}, requiredScopes...)
+	} else {
+		existing := make(map[string]struct{}, len(cfg.Google.Scopes))
+		for _, scope := range cfg.Google.Scopes {
+			existing[scope] = struct{}{}
+		}
+		for _, scope := range requiredScopes {
+			if _, ok := existing[scope]; !ok {
+				cfg.Google.Scopes = append(cfg.Google.Scopes, scope)
+			}
 		}
 	}
 

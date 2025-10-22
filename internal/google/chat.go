@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"google.golang.org/api/chat/v1"
+	"google.golang.org/api/googleapi"
 
 	"github.com/alexrabarts/focus-agent/internal/config"
 	"github.com/alexrabarts/focus-agent/internal/db"
@@ -83,8 +85,8 @@ type Button struct {
 
 // TextButton represents a text button
 type TextButton struct {
-	Text    string      `json:"text"`
-	OnClick *OnClick    `json:"onClick"`
+	Text    string   `json:"text"`
+	OnClick *OnClick `json:"onClick"`
 }
 
 // OnClick represents the action when a button is clicked
@@ -104,28 +106,78 @@ func (c *ChatClient) getDMSpace(ctx context.Context) (string, error) {
 		return c.dmSpace, nil
 	}
 
-	// List spaces to find existing DM with the bot
-	listCall := c.Service.Spaces.List().Filter("spaceType = \"DIRECT_MESSAGE\"")
-	resp, err := listCall.Do()
-	if err != nil {
-		return "", fmt.Errorf("failed to list spaces: %w", err)
+	// Use configured space if provided (e.g., manually captured DM)
+	if configured := strings.TrimSpace(c.Config.Chat.SpaceID); configured != "" {
+		if !strings.HasPrefix(configured, "spaces/") {
+			configured = fmt.Sprintf("spaces/%s", configured)
+		}
+		c.dmSpace = configured
+		log.Printf("Using configured Chat DM space: %s", c.dmSpace)
+		return c.dmSpace, nil
 	}
 
-	// Look for a DM space (they should have spaceType DIRECT_MESSAGE)
-	for _, space := range resp.Spaces {
-		if space.SpaceType == "DIRECT_MESSAGE" {
-			// Cache and return the DM space
+	userEmail := strings.ToLower(c.Config.Google.UserEmail)
+	if userEmail == "" {
+		return "", fmt.Errorf("google user email is not configured; complete Gmail setup first")
+	}
+
+	// List spaces to find existing DM with the bot
+	pageToken := ""
+	for {
+		call := c.Service.Spaces.List().
+			Filter("spaceType = \"DIRECT_MESSAGE\"")
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+
+		resp, err := call.Context(ctx).Do()
+		if err != nil {
+			return "", fmt.Errorf("failed to list spaces: %w", err)
+		}
+
+		for _, space := range resp.Spaces {
+			// Only consider single user bot DMs
+			if space.SpaceType != "DIRECT_MESSAGE" || !space.SingleUserBotDm {
+				continue
+			}
+
+			// Verify the DM is with this app
+			if _, err := c.Service.Spaces.Members.Get(fmt.Sprintf("%s/members/app", space.Name)).Context(ctx).Do(); err != nil {
+				if gerr, ok := err.(*googleapi.Error); ok && gerr.Code == http.StatusNotFound {
+					continue
+				}
+				log.Printf("Skipping Chat space %s: app membership lookup failed: %v", space.Name, err)
+				continue
+			}
+
+			// Confirm the human member matches the authenticated user
+			memberResource := fmt.Sprintf("%s/members/users/%s", space.Name, url.PathEscape(userEmail))
+			if _, err := c.Service.Spaces.Members.Get(memberResource).Context(ctx).Do(); err != nil {
+				if gerr, ok := err.(*googleapi.Error); ok {
+					switch gerr.Code {
+					case http.StatusForbidden:
+						return "", fmt.Errorf("insufficient permissions to inspect Chat memberships (enable chat.memberships.readonly scope): %w", err)
+					case http.StatusNotFound:
+						// Not the DM we need
+						continue
+					}
+				}
+				log.Printf("Skipping Chat space %s: user membership lookup failed: %v", space.Name, err)
+				continue
+			}
+
 			c.dmSpace = space.Name
-			log.Printf("Found DM space: %s", c.dmSpace)
+			log.Printf("Bound Focus Agent DM space %s to %s", c.dmSpace, userEmail)
 			return c.dmSpace, nil
 		}
+
+		if resp.NextPageToken == "" {
+			break
+		}
+		pageToken = resp.NextPageToken
 	}
 
-	// If no DM space found, we need to create one
-	// Note: DM spaces are typically created when the user first messages the bot
-	// For now, we'll use "spaces/AAAAAAAAAAA" as a placeholder that will be replaced
-	// when the user first interacts with the bot
-	return "", fmt.Errorf("no DM space found with Focus Agent bot - please send a message to the bot first")
+	return "", fmt.Errorf("no DM space found for %s - send a DM to Focus Agent to initialize the conversation", userEmail)
 }
 
 // SendMessage sends a message to Google Chat via the API
@@ -237,8 +289,8 @@ func (c *ChatClient) createDailyBriefText(tasks []*db.Task, events []*db.Event) 
 	// Top Tasks section
 	if len(tasks) > 0 {
 		brief.WriteString("📋 *Top Priority Tasks*\n")
-		for i, task := range tasks {
-			if i >= 10 {
+		for idx, task := range tasks {
+			if idx >= 5 {
 				break
 			}
 			priority := c.getPriorityIndicator(task.Score)
@@ -246,44 +298,16 @@ func (c *ChatClient) createDailyBriefText(tasks []*db.Task, events []*db.Event) 
 			if task.DueTS != nil {
 				dueStr = fmt.Sprintf(" • Due: %s", task.DueTS.Format("3:04 PM"))
 			}
-			brief.WriteString(fmt.Sprintf("\n%s *Task #%d*\n", priority, i+1))
-			brief.WriteString(fmt.Sprintf("%s\n", task.Title))
-			brief.WriteString(fmt.Sprintf("_%s%s_\n", task.Source, dueStr))
-		}
-		brief.WriteString("\n")
-	}
+			brief.WriteString(fmt.Sprintf("\n%s %s\n", priority, task.Title))
 
-	// Today's Meetings section
-	todayEvents := []*db.Event{}
-	for _, event := range events {
-		if event.StartTS.Day() == now.Day() {
-			todayEvents = append(todayEvents, event)
-		}
-	}
-
-	if len(todayEvents) > 0 {
-		brief.WriteString("📅 *Today's Meetings*\n")
-		for _, event := range todayEvents {
-			timeStr := fmt.Sprintf("%s - %s",
-				event.StartTS.Format("3:04 PM"),
-				event.EndTS.Format("3:04 PM"))
-			brief.WriteString(fmt.Sprintf("\n• %s\n", event.Title))
-			brief.WriteString(fmt.Sprintf("  _%s_\n", timeStr))
-			if event.MeetingLink != "" {
-				brief.WriteString(fmt.Sprintf("  Join: %s\n", event.MeetingLink))
+			sourceLabel, sourceLink, _ := c.getTaskSourceInfo(task)
+			if sourceLink != "" {
+				brief.WriteString(fmt.Sprintf("[%s](%s)%s\n", sourceLabel, sourceLink, dueStr))
+			} else {
+				brief.WriteString(fmt.Sprintf("%s%s\n", sourceLabel, dueStr))
 			}
 		}
-		brief.WriteString("\n")
 	}
-
-	// Focus Blocks section
-	brief.WriteString("🎯 *Recommended Focus Blocks*\n")
-	brief.WriteString(c.generateFocusBlocks(tasks, events))
-	brief.WriteString("\n")
-
-	// Quick Stats section
-	brief.WriteString("📊 *Quick Stats*\n")
-	brief.WriteString(c.generateStats(tasks, events))
 
 	return brief.String()
 }
@@ -304,8 +328,8 @@ func (c *ChatClient) createDailyBriefCard(tasks []*db.Task, events []*db.Event) 
 		taskWidgets := []CardWidget{}
 
 		for i, task := range tasks {
-			if i >= 10 {
-				break // Limit to top 10 tasks
+			if i >= 5 {
+				break // Limit to top 5 tasks
 			}
 
 			// Format task with priority indicator
@@ -315,14 +339,26 @@ func (c *ChatClient) createDailyBriefCard(tasks []*db.Task, events []*db.Event) 
 				dueStr = fmt.Sprintf(" • Due: %s", task.DueTS.Format("3:04 PM"))
 			}
 
+			sourceLabel, sourceLink, buttonText := c.getTaskSourceInfo(task)
 			taskWidgets = append(taskWidgets, CardWidget{
 				KeyValue: &KeyValue{
-					TopLabel:         fmt.Sprintf("%s Task #%d", priority, i+1),
+					TopLabel:         priority,
 					Content:          task.Title,
-					BottomLabel:      fmt.Sprintf("%s%s", task.Source, dueStr),
+					BottomLabel:      fmt.Sprintf("%s%s", sourceLabel, dueStr),
 					ContentMultiline: true,
 				},
 			})
+
+			if sourceLink != "" {
+				taskWidgets[len(taskWidgets)-1].KeyValue.Button = &Button{
+					TextButton: &TextButton{
+						Text: buttonText,
+						OnClick: &OnClick{
+							OpenLink: &OpenLink{URL: sourceLink},
+						},
+					},
+				}
+			}
 		}
 
 		card.Sections = append(card.Sections, CardSection{
@@ -330,81 +366,6 @@ func (c *ChatClient) createDailyBriefCard(tasks []*db.Task, events []*db.Event) 
 			Widgets: taskWidgets,
 		})
 	}
-
-	// Today's Meetings section
-	if len(events) > 0 {
-		eventWidgets := []CardWidget{}
-
-		for _, event := range events {
-			// Only show today's events
-			if event.StartTS.Day() != now.Day() {
-				continue
-			}
-
-			timeStr := fmt.Sprintf("%s - %s",
-				event.StartTS.Format("3:04 PM"),
-				event.EndTS.Format("3:04 PM"))
-
-			meetingWidget := CardWidget{
-				KeyValue: &KeyValue{
-					Icon:             "EVENT_SEAT",
-					Content:          event.Title,
-					BottomLabel:      timeStr,
-					ContentMultiline: true,
-				},
-			}
-
-			// Add meeting link button if available
-			if event.MeetingLink != "" {
-				meetingWidget.KeyValue.Button = &Button{
-					TextButton: &TextButton{
-						Text: "Join",
-						OnClick: &OnClick{
-							OpenLink: &OpenLink{
-								URL: event.MeetingLink,
-							},
-						},
-					},
-				}
-			}
-
-			eventWidgets = append(eventWidgets, meetingWidget)
-		}
-
-		if len(eventWidgets) > 0 {
-			card.Sections = append(card.Sections, CardSection{
-				Header:  "📅 Today's Meetings",
-				Widgets: eventWidgets,
-			})
-		}
-	}
-
-	// Focus Blocks section
-	focusWidgets := []CardWidget{
-		{
-			TextParagraph: &TextParagraph{
-				Text: c.generateFocusBlocks(tasks, events),
-			},
-		},
-	}
-
-	card.Sections = append(card.Sections, CardSection{
-		Header:  "🎯 Recommended Focus Blocks",
-		Widgets: focusWidgets,
-	})
-
-	// Quick Stats section
-	statsText := c.generateStats(tasks, events)
-	card.Sections = append(card.Sections, CardSection{
-		Header: "📊 Quick Stats",
-		Widgets: []CardWidget{
-			{
-				TextParagraph: &TextParagraph{
-					Text: statsText,
-				},
-			},
-		},
-	})
 
 	return card
 }
@@ -508,6 +469,36 @@ func (c *ChatClient) getPriorityIndicator(score float64) string {
 	default:
 		return "🟢"
 	}
+}
+
+// getTaskSourceInfo returns a human-readable source label, hyperlink, and button text
+func (c *ChatClient) getTaskSourceInfo(task *db.Task) (string, string, string) {
+	switch task.Source {
+	case "gmail":
+		if task.SourceID != "" {
+			return "Gmail", fmt.Sprintf("https://mail.google.com/mail/u/0/#inbox/%s", task.SourceID), "Open in Gmail"
+		}
+		return "Gmail", "", ""
+	case "gtasks", "google_tasks":
+		return "Google Tasks", "https://tasks.google.com", "Open in Tasks"
+	default:
+		return humanizeSource(task.Source), "", ""
+	}
+}
+
+func humanizeSource(src string) string {
+	if src == "" {
+		return "Unknown"
+	}
+
+	parts := strings.Split(src, "_")
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
+	}
+	return strings.Join(parts, " ")
 }
 
 // generateFocusBlocks generates recommended focus time blocks
