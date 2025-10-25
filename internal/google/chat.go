@@ -302,7 +302,7 @@ func (c *ChatClient) createDailyBriefText(tasks []*db.Task, events []*db.Event) 
 
 			sourceLabel, sourceLink, _ := c.getTaskSourceInfo(task)
 			if sourceLink != "" {
-				brief.WriteString(fmt.Sprintf("[%s](%s)%s\n", sourceLabel, sourceLink, dueStr))
+				brief.WriteString(fmt.Sprintf("<%s|%s>%s\n", sourceLink, sourceLabel, dueStr))
 			} else {
 				brief.WriteString(fmt.Sprintf("%s%s\n", sourceLabel, dueStr))
 			}
