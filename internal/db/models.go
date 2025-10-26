@@ -577,16 +577,20 @@ func (db *DB) GetThreadsWithSummaries(limit int) ([]*Thread, error) {
 	var threads []*Thread
 	for rows.Next() {
 		thread := &Thread{}
+		var priorityScore sql.NullFloat64
 		var nextFollowupTS, lastSyncedTS, createdTS, updatedTS sql.NullInt64
 
 		err := rows.Scan(
 			&thread.ID, &thread.LastHistoryID, &thread.Summary, &thread.SummaryHash,
-			&thread.TaskCount, &thread.PriorityScore, &thread.RelevantToUser, &nextFollowupTS, &lastSyncedTS, &createdTS, &updatedTS,
+			&thread.TaskCount, &priorityScore, &thread.RelevantToUser, &nextFollowupTS, &lastSyncedTS, &createdTS, &updatedTS,
 		)
 		if err != nil {
 			return nil, err
 		}
 
+		if priorityScore.Valid {
+			thread.PriorityScore = priorityScore.Float64
+		}
 		if nextFollowupTS.Valid {
 			t := time.Unix(nextFollowupTS.Int64, 0)
 			thread.NextFollowupTS = &t
