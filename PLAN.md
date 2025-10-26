@@ -1,23 +1,8 @@
 # Focus Agent - Future Features
 
-## Next Actions (as of October 23, 2025)
+## Next Actions (as of October 26, 2025)
 
-### 1. Validate Daily Brief Delivery Path
-- Run `./focus-agent -brief` against the updated config to force today's brief and confirm it lands in the configured DM space without falling back to the webhook.
-- Capture the rendered message to document whether Google Chat still strips markdown links in plain-text mode.
-- File any delivery anomalies (missing tasks/events, duplicate sends, link formatting) so we can decide whether to adjust formatting or fall back to cards once service-account auth is in place.
-
-### 2. Fix Google Chat Markdown Link Rendering
-- Audit `createDailyBriefText` in `internal/google/chat.go` to confirm how we format link labels vs. URLs and compare to Google's CURRENT markdown guidance for user-auth bots.
-- Adjust formatting (likely swapping to `<https://...|Label>` style or bare URLs) and add unit coverage that exercises both rich and plain-text paths.
-- Re-run the forced brief and document the before/after render so we can validate the change in production on October 24, 2025.
-
-### 3. Operationalize Task Enrichment Backfill
-- Execute `./focus-agent -enrich-tasks` in production and monitor the log for token usage, per-task errors, and runtime.
-- Add a short runbook entry summarizing the enrichment workflow, cost expectations, and how to re-run on demand.
-- Schedule a lightweight follow-up on October 28, 2025 to spot-check that newly created tasks retain rich descriptions.
-
-### 4. Prep Interactive Chat Commands Implementation
+### 1. Prep Interactive Chat Commands Implementation
 - Finalize HTTPS + custom domain routing so the `POST /api/chat/webhook` endpoint can be exposed publicly.
 - Prototype the command parser (`internal/chat/commands.go`) behind a feature flag and write handler scaffolding that no-ops until the domain cutover is complete.
 - Draft the `docs/CHAT_SETUP.md` guide while the flow is fresh, capturing OAuth scope requirements, webhook registration steps, and testing commands we will enable first.
@@ -207,6 +192,32 @@ Summarize changes in Google Docs you have access to
 ---
 
 ## Completed Features
+
+### Ollama LLM Integration (2025-10-26)
+- Added Ollama as primary LLM provider with Mistral 7B model
+- Implemented hybrid fallback chain: Ollama → Claude CLI → Gemini Flash
+- Fast local inference (2.4s response time) with zero cost
+- All three providers initialized and operational in production
+- Updated configuration in both local and production environments
+- Task enrichment now uses Ollama first, falling back to Claude/Gemini if unavailable
+
+### Daily Brief DM Space Delivery (2025-10-26)
+- Validated daily brief delivery to Google Chat DM space
+- Configured space ID: `spaces/oF73IiAAAAE`
+- Created `find-chat-space` tool to discover bot DM spaces
+- Confirmed briefs are delivered successfully without webhook fallback
+
+### Google Chat Link Rendering Fix (2025-10-26)
+- Fixed hyperlink rendering in Google Chat messages
+- Changed from markdown `[label](url)` to Google Chat native `<url|label>` syntax
+- Links now render as clickable hyperlinks in daily briefs
+- Applied to task source links in `internal/google/chat.go`
+
+### Task Enrichment Backfill Workflow (2025-10-26)
+- Documented enrichment process in CLAUDE.md
+- Verified LLM strategy: Ollama (primary) → Claude CLI → Gemini (fallback)
+- Added runbook for running enrichment on demand
+- Tested enrichment command successfully (0 tasks needed enrichment)
 
 ### Task Extraction Filtering (2025-01-08)
 - Updated AI prompt to only extract tasks for the user
