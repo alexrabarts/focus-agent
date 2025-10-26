@@ -55,11 +55,17 @@ type Gemini struct {
 	BaseRetryDelay   int            `yaml:"base_retry_delay_seconds"`
 }
 
+type OllamaHost struct {
+	URL     string `yaml:"url"`     // e.g., "http://alex-mm:11434"
+	Workers int    `yaml:"workers"` // Number of concurrent workers for this host
+	Name    string `yaml:"name"`    // Display name (e.g., "alex-mm")
+}
+
 type Ollama struct {
-	URL            string `yaml:"url"`             // e.g., "http://alex-mm:11434"
-	Model          string `yaml:"model"`           // e.g., "mistral:latest"
-	Enabled        bool   `yaml:"enabled"`         // Enable/disable Ollama
-	TimeoutSeconds int    `yaml:"timeout_seconds"` // Request timeout
+	Hosts          []OllamaHost `yaml:"hosts"`           // Multiple Ollama hosts with worker counts
+	Model          string       `yaml:"model"`           // e.g., "qwen2.5:7b"
+	Enabled        bool         `yaml:"enabled"`         // Enable/disable Ollama
+	TimeoutSeconds int          `yaml:"timeout_seconds"` // Request timeout per request
 }
 
 type Chat struct {
@@ -269,6 +275,24 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Gemini.BaseRetryDelay == 0 {
 		cfg.Gemini.BaseRetryDelay = 60
+	}
+
+	// Ollama defaults - support for distributed processing across multiple hosts
+	if cfg.Ollama.Model == "" {
+		cfg.Ollama.Model = "qwen2.5:7b"
+	}
+	if cfg.Ollama.TimeoutSeconds == 0 {
+		cfg.Ollama.TimeoutSeconds = 300 // 5 minutes for model inference
+	}
+	// If no hosts configured but Ollama is enabled, add default localhost
+	if len(cfg.Ollama.Hosts) == 0 && cfg.Ollama.Enabled {
+		cfg.Ollama.Hosts = []OllamaHost{
+			{
+				URL:     "http://localhost:11434",
+				Workers: 4,
+				Name:    "localhost",
+			},
+		}
 	}
 
 	// API defaults

@@ -371,6 +371,11 @@ If there are NO action items for me, respond with: "No tasks found."
 `, userEmail, userEmail, content)
 }
 
+// EnrichTaskDescription generates a rich task description
+func (c *OllamaClient) EnrichTaskDescription(ctx context.Context, prompt string) (string, error) {
+	return c.GenerateWithFormat(ctx, prompt, "json")
+}
+
 // parseTasksFromResponse parses the task extraction response
 func (c *OllamaClient) parseTasksFromResponse(response string) []*db.Task {
 	var tasks []*db.Task

@@ -13,13 +13,22 @@ import (
 	"github.com/alexrabarts/focus-agent/internal/db"
 )
 
+// OllamaInterface defines methods that both OllamaClient and DistributedOllamaClient implement
+type OllamaInterface interface {
+	SummarizeThread(ctx context.Context, messages []*db.Message) (string, error)
+	ExtractTasks(ctx context.Context, content, userEmail string) ([]*db.Task, error)
+	EnrichTaskDescription(ctx context.Context, prompt string) (string, error)
+	EvaluateStrategicAlignment(ctx context.Context, task *db.Task, priorities *config.Priorities) (*StrategicAlignmentResult, error)
+}
+
 // HybridClient uses Ollama as primary, Claude CLI as secondary, and Gemini as final fallback
 type HybridClient struct {
-	ollama     *OllamaClient
-	claudePath string
-	gemini     *GeminiClient
-	db         *db.DB
-	config     *config.Config
+	ollama         OllamaInterface // Can be *OllamaClient or *DistributedOllamaClient
+	distributedOllama *DistributedOllamaClient // Keep reference for shutdown
+	claudePath     string
+	gemini         *GeminiClient
+	db             *db.DB
+	config         *config.Config
 }
 
 // NewHybridClient creates a hybrid LLM client with fallback chain: Ollama -> Claude CLI -> Gemini
@@ -30,20 +39,32 @@ func NewHybridClient(geminiAPIKey string, database *db.DB, cfg *config.Config) (
 		return nil, fmt.Errorf("failed to create Gemini fallback client: %w", err)
 	}
 
-	// Initialize Ollama client if enabled
-	var ollamaClient *OllamaClient
+	// Initialize Ollama client(s) if enabled
+	var ollamaInterface OllamaInterface
+	var distributedOllama *DistributedOllamaClient
+
 	if cfg.Ollama.Enabled {
-		ollamaClient = NewOllamaClient(cfg.Ollama.URL, cfg.Ollama.Model)
+		// Use distributed client if multiple hosts configured
+		if len(cfg.Ollama.Hosts) > 1 {
+			distributedOllama = NewDistributedOllamaClient(cfg)
+			if distributedOllama != nil {
+				ollamaInterface = distributedOllama
+			}
+		} else if len(cfg.Ollama.Hosts) == 1 {
+			// Single host - use simple client
+			host := cfg.Ollama.Hosts[0]
+			simpleClient := NewOllamaClient(host.URL, cfg.Ollama.Model)
 
-		// Test connectivity
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+			// Test connectivity
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 
-		if err := ollamaClient.Ping(ctx); err != nil {
-			log.Printf("Warning: Ollama server unreachable at %s: %v (will use fallbacks)", cfg.Ollama.URL, err)
-			ollamaClient = nil // Disable if unreachable
-		} else {
-			log.Printf("Ollama client initialized: %s (model: %s)", cfg.Ollama.URL, cfg.Ollama.Model)
+			if err := simpleClient.Ping(ctx); err != nil {
+				log.Printf("Warning: Ollama server unreachable at %s: %v (will use fallbacks)", host.URL, err)
+			} else {
+				log.Printf("Ollama client initialized: %s (model: %s)", host.URL, cfg.Ollama.Model)
+				ollamaInterface = simpleClient
+			}
 		}
 	} else {
 		log.Printf("Ollama disabled in config")
@@ -65,16 +86,22 @@ func NewHybridClient(geminiAPIKey string, database *db.DB, cfg *config.Config) (
 	}
 
 	return &HybridClient{
-		ollama:     ollamaClient,
-		claudePath: claudePath,
-		gemini:     geminiClient,
-		db:         database,
-		config:     cfg,
+		ollama:            ollamaInterface,
+		distributedOllama: distributedOllama,
+		claudePath:        claudePath,
+		gemini:            geminiClient,
+		db:                database,
+		config:            cfg,
 	}, nil
 }
 
 // Close closes all underlying clients
 func (h *HybridClient) Close() error {
+	// Shutdown distributed Ollama worker pool if running
+	if h.distributedOllama != nil {
+		h.distributedOllama.Shutdown()
+	}
+
 	if h.gemini != nil {
 		return h.gemini.Close()
 	}
@@ -247,10 +274,10 @@ func (h *HybridClient) EnrichTaskDescription(ctx context.Context, task *db.Task,
 		return cached.Response, nil
 	}
 
-	// Try Ollama first
+	// Try Ollama first (distributed or single client)
 	if h.ollama != nil {
 		startTime := time.Now()
-		enrichedDesc, err := h.ollama.Generate(ctx, prompt)
+		enrichedDesc, err := h.ollama.EnrichTaskDescription(ctx, prompt)
 		if err == nil {
 			log.Printf("✓ Ollama succeeded for EnrichTaskDescription (%.2fs)", time.Since(startTime).Seconds())
 
