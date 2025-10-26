@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os/exec"
@@ -236,13 +237,10 @@ func (h *HybridClient) EnrichTaskDescription(ctx context.Context, task *db.Task,
 	return h.gemini.EnrichTaskDescription(ctx, task, messages)
 }
 
-// EvaluateStrategicAlignment evaluates strategic alignment (Claude primary, Gemini fallback)
+// EvaluateStrategicAlignment evaluates strategic alignment (Ollama -> Claude -> Gemini fallback)
 func (h *HybridClient) EvaluateStrategicAlignment(ctx context.Context, task *db.Task, priorities *config.Priorities) (*StrategicAlignmentResult, error) {
-	// Build prompt
+	// Build prompt (using gemini's prompt builder for consistency)
 	prompt := h.gemini.buildStrategicAlignmentPrompt(task, priorities)
-
-	// Add JSON formatting instruction for Claude
-	claudePrompt := prompt + "\n\nIMPORTANT: Respond with ONLY a valid JSON object, no markdown formatting or explanation. The JSON must have these exact fields: score (number), okrs (array of strings), focus_areas (array of strings), projects (array of strings), reasoning (string)."
 
 	// Check cache
 	hash := h.gemini.hashPrompt(prompt)
@@ -252,7 +250,41 @@ func (h *HybridClient) EvaluateStrategicAlignment(ctx context.Context, task *db.
 		return h.gemini.parseStrategicAlignmentResponse(cached.Response), nil
 	}
 
-	// Try Claude CLI first
+	// Try Ollama first (qwen2.5:7b with JSON format)
+	if h.ollama != nil {
+		startTime := time.Now()
+		result, err := h.ollama.EvaluateStrategicAlignment(ctx, task, priorities)
+		if err == nil {
+			log.Printf("✓ Ollama succeeded for EvaluateStrategicAlignment (%.2fs)", time.Since(startTime).Seconds())
+
+			// Convert result back to JSON for caching
+			resultJSON, _ := json.Marshal(result)
+			response := string(resultJSON)
+
+			// Cache the response
+			tokens := h.gemini.estimateTokens(prompt + response)
+			cache := &db.LLMCache{
+				Hash:      hash,
+				Prompt:    prompt,
+				Response:  response,
+				Model:     "ollama-" + h.config.Ollama.Model,
+				Tokens:    tokens,
+				ExpiresAt: time.Now().Add(7 * 24 * time.Hour), // 7 days like Gemini
+			}
+			h.db.SaveCachedResponse(cache)
+
+			// Log usage (free, so cost = 0)
+			h.db.LogUsage("ollama", "strategic_alignment", tokens, 0, time.Since(startTime), nil)
+
+			return result, nil
+		}
+		log.Printf("⚠ Ollama failed for EvaluateStrategicAlignment: %v", err)
+	}
+
+	// Add JSON formatting instruction for Claude
+	claudePrompt := prompt + "\n\nIMPORTANT: Respond with ONLY a valid JSON object, no markdown formatting or explanation. The JSON must have these exact fields: score (number), okrs (array of strings), focus_areas (array of strings), projects (array of strings), reasoning (string)."
+
+	// Try Claude CLI second
 	startTime := time.Now()
 	response, err := h.callClaude(ctx, claudePrompt)
 	if err == nil {
@@ -277,7 +309,7 @@ func (h *HybridClient) EvaluateStrategicAlignment(ctx context.Context, task *db.
 		return h.gemini.parseStrategicAlignmentResponse(response), nil
 	}
 
-	// Fallback to Gemini
+	// Final fallback to Gemini
 	log.Printf("⚠ Claude CLI failed, falling back to Gemini: %v", err)
 	return h.gemini.EvaluateStrategicAlignment(ctx, task, priorities)
 }
