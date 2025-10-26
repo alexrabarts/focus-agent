@@ -12,6 +12,7 @@ type Config struct {
 	Database   Database   `yaml:"database"`
 	Google     Google     `yaml:"google"`
 	Gemini     Gemini     `yaml:"gemini"`
+	Ollama     Ollama     `yaml:"ollama"`
 	Chat       Chat       `yaml:"chat"`
 	API        API        `yaml:"api"`
 	Remote     Remote     `yaml:"remote"`
@@ -52,6 +53,13 @@ type Gemini struct {
 	RetryOnRateLimit bool           `yaml:"retry_on_rate_limit"`
 	MaxRetries       int            `yaml:"max_retries"`
 	BaseRetryDelay   int            `yaml:"base_retry_delay_seconds"`
+}
+
+type Ollama struct {
+	URL            string `yaml:"url"`             // e.g., "http://alex-mm:11434"
+	Model          string `yaml:"model"`           // e.g., "mistral:latest"
+	Enabled        bool   `yaml:"enabled"`         // Enable/disable Ollama
+	TimeoutSeconds int    `yaml:"timeout_seconds"` // Request timeout
 }
 
 type Chat struct {

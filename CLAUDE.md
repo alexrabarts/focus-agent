@@ -31,11 +31,17 @@
 
 The `-enrich-tasks` flag enriches existing email-extracted tasks with AI-generated descriptions. This adds context from thread messages to tasks that have missing or short (< 50 chars) descriptions.
 
-**LLM Strategy:**
-- Primary: Claude CLI (Haiku) - Free, but not installed on production server
-- Fallback: Gemini 2.5 Flash - $0.20 per 1M tokens (~$0.014 per 100 tasks)
-- Rate limit: 10 requests/minute (Gemini free tier)
+**LLM Strategy (Priority Order):**
+1. **Ollama (Mistral 7B)** - Free, self-hosted on alex-mm:11434
+2. Claude CLI (Haiku) - Free (via Claude.ai account)
+3. Gemini 2.5 Flash - $0.20 per 1M tokens (paid fallback)
+
+**Configuration:**
+- Ollama URL: `http://alex-mm:11434`
+- Ollama Model: `mistral:latest` (7B parameters)
+- Rate limit: No limit (self-hosted)
 - Caching: 24 hours via LLM cache to reduce costs
+- Fallback: Automatic if Ollama is unreachable
 
 **When to run:**
 - After major email imports

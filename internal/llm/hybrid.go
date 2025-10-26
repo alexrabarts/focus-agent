@@ -12,20 +12,40 @@ import (
 	"github.com/alexrabarts/focus-agent/internal/db"
 )
 
-// HybridClient uses Claude CLI as primary with Gemini as fallback
+// HybridClient uses Ollama as primary, Claude CLI as secondary, and Gemini as final fallback
 type HybridClient struct {
+	ollama     *OllamaClient
 	claudePath string
 	gemini     *GeminiClient
 	db         *db.DB
 	config     *config.Config
 }
 
-// NewHybridClient creates a hybrid LLM client
+// NewHybridClient creates a hybrid LLM client with fallback chain: Ollama -> Claude CLI -> Gemini
 func NewHybridClient(geminiAPIKey string, database *db.DB, cfg *config.Config) (*HybridClient, error) {
-	// Initialize Gemini client as fallback
+	// Initialize Gemini client as final fallback
 	geminiClient, err := NewGeminiClient(geminiAPIKey, database, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Gemini fallback client: %w", err)
+	}
+
+	// Initialize Ollama client if enabled
+	var ollamaClient *OllamaClient
+	if cfg.Ollama.Enabled {
+		ollamaClient = NewOllamaClient(cfg.Ollama.URL, cfg.Ollama.Model)
+
+		// Test connectivity
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := ollamaClient.Ping(ctx); err != nil {
+			log.Printf("Warning: Ollama server unreachable at %s: %v (will use fallbacks)", cfg.Ollama.URL, err)
+			ollamaClient = nil // Disable if unreachable
+		} else {
+			log.Printf("Ollama client initialized: %s (model: %s)", cfg.Ollama.URL, cfg.Ollama.Model)
+		}
+	} else {
+		log.Printf("Ollama disabled in config")
 	}
 
 	// Find claude CLI - try full path first, then PATH
@@ -34,7 +54,7 @@ func NewHybridClient(geminiAPIKey string, database *db.DB, cfg *config.Config) (
 		// Try finding in PATH as fallback
 		claudePath, err = exec.LookPath("claude")
 		if err != nil {
-			log.Printf("Warning: claude CLI not found, will use Gemini only: %v", err)
+			log.Printf("Warning: claude CLI not found: %v", err)
 			claudePath = ""
 		} else {
 			log.Printf("Claude CLI found at: %s", claudePath)
@@ -44,6 +64,7 @@ func NewHybridClient(geminiAPIKey string, database *db.DB, cfg *config.Config) (
 	}
 
 	return &HybridClient{
+		ollama:     ollamaClient,
 		claudePath: claudePath,
 		gemini:     geminiClient,
 		db:         database,
@@ -178,7 +199,7 @@ func (h *HybridClient) ExtractTasks(ctx context.Context, content string) ([]*db.
 	return h.gemini.ExtractTasks(ctx, content)
 }
 
-// EnrichTaskDescription generates rich contextual descriptions (Claude primary, Gemini fallback)
+// EnrichTaskDescription generates rich contextual descriptions (Ollama -> Claude CLI -> Gemini fallback)
 func (h *HybridClient) EnrichTaskDescription(ctx context.Context, task *db.Task, messages []*db.Message) (string, error) {
 	// Build prompt
 	prompt := h.gemini.buildTaskEnrichmentPrompt(task, messages)
@@ -191,7 +212,34 @@ func (h *HybridClient) EnrichTaskDescription(ctx context.Context, task *db.Task,
 		return cached.Response, nil
 	}
 
-	// Try Claude CLI first
+	// Try Ollama first
+	if h.ollama != nil {
+		startTime := time.Now()
+		enrichedDesc, err := h.ollama.Generate(ctx, prompt)
+		if err == nil {
+			log.Printf("✓ Ollama succeeded for EnrichTaskDescription (%.2fs)", time.Since(startTime).Seconds())
+
+			// Cache the response
+			tokens := h.gemini.estimateTokens(prompt + enrichedDesc)
+			cache := &db.LLMCache{
+				Hash:      hash,
+				Prompt:    prompt,
+				Response:  enrichedDesc,
+				Model:     "ollama-" + h.config.Ollama.Model,
+				Tokens:    tokens,
+				ExpiresAt: time.Now().Add(h.gemini.cacheTTL),
+			}
+			h.db.SaveCachedResponse(cache)
+
+			// Log usage (free, so cost = 0)
+			h.db.LogUsage("ollama", "enrich_task", tokens, 0, time.Since(startTime), nil)
+
+			return enrichedDesc, nil
+		}
+		log.Printf("⚠ Ollama failed for EnrichTaskDescription: %v", err)
+	}
+
+	// Try Claude CLI second
 	startTime := time.Now()
 	enrichedDesc, err := h.callClaude(ctx, prompt)
 	if err == nil {
@@ -215,7 +263,7 @@ func (h *HybridClient) EnrichTaskDescription(ctx context.Context, task *db.Task,
 		return enrichedDesc, nil
 	}
 
-	// Fallback to Gemini
+	// Final fallback to Gemini
 	log.Printf("⚠ Claude CLI failed, falling back to Gemini: %v", err)
 	return h.gemini.EnrichTaskDescription(ctx, task, messages)
 }
