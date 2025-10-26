@@ -291,3 +291,154 @@ func (c *OllamaClient) parseStrategicAlignmentResponse(response string) *Strateg
 
 	return result
 }
+
+// SummarizeThread generates a concise summary of an email thread
+func (c *OllamaClient) SummarizeThread(ctx context.Context, messages []*db.Message) (string, error) {
+	prompt := c.buildThreadSummaryPrompt(messages)
+
+	response, err := c.Generate(ctx, prompt)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate summary: %w", err)
+	}
+
+	return strings.TrimSpace(response), nil
+}
+
+// buildThreadSummaryPrompt creates a prompt for thread summarization
+func (c *OllamaClient) buildThreadSummaryPrompt(messages []*db.Message) string {
+	var prompt strings.Builder
+
+	prompt.WriteString("Summarize this email thread concisely. Focus on:\n")
+	prompt.WriteString("1. Main topic/issue\n")
+	prompt.WriteString("2. Key decisions or action items\n")
+	prompt.WriteString("3. Who needs to do what\n")
+	prompt.WriteString("4. Deadlines mentioned\n")
+	prompt.WriteString("5. Any risks or blockers\n\n")
+
+	prompt.WriteString("Thread:\n")
+	for _, msg := range messages {
+		prompt.WriteString(fmt.Sprintf("From: %s\n", msg.From))
+		prompt.WriteString(fmt.Sprintf("Date: %s\n", msg.Timestamp.Format("Jan 2, 3:04 PM")))
+		prompt.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
+		prompt.WriteString(fmt.Sprintf("Content: %s\n\n", msg.Snippet))
+	}
+
+	prompt.WriteString("Summary (be concise, max 200 words):")
+
+	return prompt.String()
+}
+
+// ExtractTasks extracts action items from content
+func (c *OllamaClient) ExtractTasks(ctx context.Context, content, userEmail string) ([]*db.Task, error) {
+	prompt := c.buildTaskExtractionPrompt(content, userEmail)
+
+	response, err := c.Generate(ctx, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract tasks: %w", err)
+	}
+
+	return c.parseTasksFromResponse(response), nil
+}
+
+// buildTaskExtractionPrompt creates a prompt for task extraction
+func (c *OllamaClient) buildTaskExtractionPrompt(content, userEmail string) string {
+	if userEmail == "" {
+		userEmail = "the user"
+	}
+
+	return fmt.Sprintf(`Extract action items from this content that are FOR ME (%s) to do.
+
+IMPORTANT RULES:
+- ONLY extract tasks where I (%s) am responsible or need to take action
+- SKIP tasks assigned to other specific people (e.g., "Andrew: do X", "Maria: review Y")
+- INCLUDE tasks with no owner specified (assume they're for me)
+- INCLUDE tasks marked as "me", "you", or my email address
+
+For each task, provide:
+- Title (brief description)
+- Owner (if mentioned, use "me" if it's for me, otherwise the person's name/email)
+- Due date/urgency (if mentioned)
+- Priority (High/Medium/Low based on context)
+
+Content:
+%s
+
+Format as a numbered list. Example:
+1. Title: Review Q3 budget | Owner: me | Due: Friday | Priority: High
+2. Title: Send meeting notes | Owner: me | Due: Today | Priority: Medium
+
+If there are NO action items for me, respond with: "No tasks found."
+`, userEmail, userEmail, content)
+}
+
+// parseTasksFromResponse parses the task extraction response
+func (c *OllamaClient) parseTasksFromResponse(response string) []*db.Task {
+	var tasks []*db.Task
+
+	// Check for "no tasks" response
+	if strings.Contains(strings.ToLower(response), "no tasks found") ||
+		strings.Contains(strings.ToLower(response), "no action items") {
+		return tasks
+	}
+
+	// Parse numbered list format
+	lines := strings.Split(response, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Match numbered list items: "1. Title: X | Owner: Y | Due: Z | Priority: W"
+		// More flexible regex to catch various formats
+		if !strings.HasPrefix(line, "1") && !strings.HasPrefix(line, "2") &&
+			!strings.HasPrefix(line, "3") && !strings.HasPrefix(line, "4") &&
+			!strings.HasPrefix(line, "5") && !strings.HasPrefix(line, "6") &&
+			!strings.HasPrefix(line, "7") && !strings.HasPrefix(line, "8") &&
+			!strings.HasPrefix(line, "9") {
+			continue
+		}
+
+		// Remove number prefix
+		line = strings.TrimLeft(line, "0123456789.")
+		line = strings.TrimSpace(line)
+
+		task := &db.Task{
+			Source: "gmail",
+			Status: "pending",
+		}
+
+		// Parse pipe-delimited fields
+		parts := strings.Split(line, "|")
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+
+			if strings.HasPrefix(strings.ToLower(part), "title:") {
+				task.Title = strings.TrimSpace(strings.TrimPrefix(part, "Title:"))
+				task.Title = strings.TrimSpace(strings.TrimPrefix(task.Title, "title:"))
+			} else if strings.HasPrefix(strings.ToLower(part), "priority:") {
+				priority := strings.TrimSpace(strings.TrimPrefix(part, "Priority:"))
+				priority = strings.TrimSpace(strings.TrimPrefix(priority, "priority:"))
+				priority = strings.ToLower(priority)
+
+				// Map to impact score
+				switch priority {
+				case "high", "critical", "urgent":
+					task.Impact = 5
+				case "medium", "moderate":
+					task.Impact = 3
+				case "low":
+					task.Impact = 1
+				}
+			}
+			// Note: Owner and Due parsing could be added here if needed
+		}
+
+		// Only add if we got a title
+		if task.Title != "" {
+			tasks = append(tasks, task)
+		}
+	}
+
+	return tasks
+}

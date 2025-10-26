@@ -149,22 +149,88 @@ func (h *HybridClient) SummarizeThread(ctx context.Context, messages []*db.Messa
 	return h.gemini.SummarizeThread(ctx, messages)
 }
 
-// SummarizeThreadWithModelSelection summarizes with smart model selection (Gemini only for now)
+// SummarizeThreadWithModelSelection summarizes with 3-tier fallback (Ollama → Claude → Gemini)
 func (h *HybridClient) SummarizeThreadWithModelSelection(ctx context.Context, messages []*db.Message, metadata ThreadMetadata) (string, error) {
-	// For now, delegate to Gemini which has the Pro model selection logic
-	// TODO: Could add Claude Sonnet as "Pro" tier in the future
+	// Try Ollama first (free, unlimited local processing)
+	if h.ollama != nil {
+		summary, err := h.ollama.SummarizeThread(ctx, messages)
+		if err == nil && summary != "" {
+			log.Printf("Thread summary generated using Ollama (qwen2.5)")
+			return summary, nil
+		}
+		log.Printf("Ollama summarization failed, falling back to Claude: %v", err)
+	}
+
+	// Try Claude CLI second (free, remote API)
+	if h.claudePath != "" {
+		prompt := h.buildThreadSummaryPrompt(messages)
+		summary, err := h.callClaude(ctx, prompt)
+		if err == nil && summary != "" {
+			log.Printf("Thread summary generated using Claude CLI")
+			return summary, nil
+		}
+		log.Printf("Claude summarization failed, falling back to Gemini: %v", err)
+	}
+
+	// Final fallback to Gemini (with Pro/Flash model selection)
+	log.Printf("Using Gemini for thread summarization (fallback)")
 	return h.gemini.SummarizeThreadWithModelSelection(ctx, messages, metadata)
 }
 
-// ExtractTasks extracts action items (Claude primary, Gemini fallback)
+// buildThreadSummaryPrompt creates a prompt for thread summarization (reused by Claude fallback)
+func (h *HybridClient) buildThreadSummaryPrompt(messages []*db.Message) string {
+	var prompt strings.Builder
+
+	prompt.WriteString("Summarize this email thread concisely. Focus on:\n")
+	prompt.WriteString("1. Main topic/issue\n")
+	prompt.WriteString("2. Key decisions or action items\n")
+	prompt.WriteString("3. Who needs to do what\n")
+	prompt.WriteString("4. Deadlines mentioned\n")
+	prompt.WriteString("5. Any risks or blockers\n\n")
+
+	prompt.WriteString("Thread:\n")
+	for _, msg := range messages {
+		prompt.WriteString(fmt.Sprintf("From: %s\n", msg.From))
+		prompt.WriteString(fmt.Sprintf("Date: %s\n", msg.Timestamp.Format("Jan 2, 3:04 PM")))
+		prompt.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
+		prompt.WriteString(fmt.Sprintf("Content: %s\n\n", msg.Snippet))
+	}
+
+	prompt.WriteString("Summary (be concise, max 200 words):")
+
+	return prompt.String()
+}
+
+// ExtractTasks extracts action items with 3-tier fallback
 func (h *HybridClient) ExtractTasks(ctx context.Context, content string) ([]*db.Task, error) {
 	return h.ExtractTasksFromMessages(ctx, content, nil)
 }
 
+// ExtractTasksFromMessages extracts tasks with 3-tier fallback (Ollama → Claude → Gemini)
 func (h *HybridClient) ExtractTasksFromMessages(ctx context.Context, content string, messages []*db.Message) ([]*db.Task, error) {
-	// Delegate to Gemini client which handles sent email detection
-	// For now, we'll use Gemini directly for task extraction with message context
-	// TODO: Consider adding Claude/Ollama fallback for this method
+	userEmail := ""
+	if h.gemini != nil && h.gemini.config != nil {
+		userEmail = h.gemini.config.Google.UserEmail
+	}
+
+	// Try Ollama first (free, unlimited local processing)
+	if h.ollama != nil {
+		tasks, err := h.ollama.ExtractTasks(ctx, content, userEmail)
+		if err == nil && len(tasks) > 0 {
+			log.Printf("Extracted %d tasks using Ollama (qwen2.5)", len(tasks))
+			return tasks, nil
+		}
+		if err != nil {
+			log.Printf("Ollama task extraction failed, falling back to Claude: %v", err)
+		}
+	}
+
+	// Try Claude CLI second (would need implementation for task parsing)
+	// Skipping Claude for now as it requires custom parser implementation
+	// TODO: Add Claude task extraction with custom parser
+
+	// Final fallback to Gemini (handles sent email detection and filtering)
+	log.Printf("Using Gemini for task extraction (fallback)")
 	return h.gemini.ExtractTasksFromMessages(ctx, content, messages)
 }
 
