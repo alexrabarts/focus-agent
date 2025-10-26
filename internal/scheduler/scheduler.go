@@ -305,7 +305,7 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 		FROM messages
 		WHERE thread_id = ?
 		ORDER BY ts DESC
-		LIMIT 20
+		LIMIT 50
 	`
 
 	msgRows, err := s.db.Query(messagesQuery, threadID)
@@ -501,7 +501,7 @@ func (s *Scheduler) ProcessNewMessages() {
 			FROM messages
 			WHERE thread_id = ?
 			ORDER BY ts DESC
-			LIMIT 20
+			LIMIT 50
 		`
 
 		msgRows, err := s.db.Query(messagesQuery, threadID)
@@ -631,7 +631,7 @@ func (s *Scheduler) EnrichExistingTasks() error {
 		  AND status = 'pending'
 		  AND (description IS NULL OR description = '' OR LENGTH(description) < 50)
 		ORDER BY created_at DESC
-		LIMIT 100
+		LIMIT 500
 	`
 
 	rows, err := s.db.Query(query)
@@ -706,7 +706,7 @@ func (s *Scheduler) EnrichExistingTasks() error {
 			FROM messages
 			WHERE thread_id = ?
 			ORDER BY ts DESC
-			LIMIT 20
+			LIMIT 50
 		`
 
 		msgRows, err := s.db.Query(messagesQuery, info.threadID)

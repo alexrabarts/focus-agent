@@ -320,7 +320,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Limits.MaxThreadsPerSync = 50
 	}
 	if cfg.Limits.MaxAIProcessingPerRun == 0 {
-		cfg.Limits.MaxAIProcessingPerRun = 10
+		cfg.Limits.MaxAIProcessingPerRun = 100 // Increased from 10 with qwen2.5 local processing
 	}
 	if cfg.Limits.DaysOfHistory == 0 {
 		cfg.Limits.DaysOfHistory = 7
