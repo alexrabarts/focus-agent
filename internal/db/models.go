@@ -754,7 +754,8 @@ func (db *DB) RecalculateThreadPriorities() error {
 
 // AddPriority adds a new priority to the database
 func (db *DB) AddPriority(priorityType, value, notes string) (*Priority, error) {
-	id := fmt.Sprintf("%s-%d", priorityType, time.Now().Unix())
+	// Use nanoseconds for unique IDs even when adding multiple in same second
+	id := fmt.Sprintf("%s-%d", priorityType, time.Now().UnixNano())
 	createdAt := time.Now().Unix()
 
 	query := `

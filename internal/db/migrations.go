@@ -196,7 +196,7 @@ func GetMigrations() []Migration {
 			},
 		},
 		{
-			Version: 4,
+			Version: 5,
 			Name:    "create_priorities_table",
 			Up: func(tx *sql.Tx) error {
 				// Check if priorities table exists
