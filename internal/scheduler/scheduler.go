@@ -305,7 +305,6 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 		FROM messages
 		WHERE thread_id = ?
 		ORDER BY ts DESC
-		LIMIT 50
 	`
 
 	msgRows, err := s.db.Query(messagesQuery, threadID)
@@ -441,19 +440,30 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 func (s *Scheduler) ProcessNewMessages() {
 	log.Println("Processing new messages with AI...")
 
-	// Respect AI processing limits
-	maxProcessing := s.config.Limits.MaxAIProcessingPerRun
-	log.Printf("Will process up to %d threads with AI (to limit token usage)", maxProcessing)
-
 	// Get threads that need summarization
-	query := `
-		SELECT DISTINCT t.id
-		FROM threads t
-		WHERE t.summary IS NULL OR t.summary = ''
-		LIMIT ?
-	`
+	maxProcessing := s.config.Limits.MaxAIProcessingPerRun
+	var query string
+	var rows *sql.Rows
+	var err error
 
-	rows, err := s.db.Query(query, maxProcessing)
+	if maxProcessing == 0 {
+		log.Println("Processing ALL threads with AI (unlimited)")
+		query = `
+			SELECT DISTINCT t.id
+			FROM threads t
+			WHERE t.summary IS NULL OR t.summary = ''
+		`
+		rows, err = s.db.Query(query)
+	} else {
+		log.Printf("Will process up to %d threads with AI", maxProcessing)
+		query = `
+			SELECT DISTINCT t.id
+			FROM threads t
+			WHERE t.summary IS NULL OR t.summary = ''
+			LIMIT ?
+		`
+		rows, err = s.db.Query(query, maxProcessing)
+	}
 	if err != nil {
 		log.Printf("Failed to query threads: %v", err)
 		return
@@ -501,7 +511,6 @@ func (s *Scheduler) ProcessNewMessages() {
 			FROM messages
 			WHERE thread_id = ?
 			ORDER BY ts DESC
-			LIMIT 50
 		`
 
 		msgRows, err := s.db.Query(messagesQuery, threadID)
@@ -631,7 +640,6 @@ func (s *Scheduler) EnrichExistingTasks() error {
 		  AND status = 'pending'
 		  AND (description IS NULL OR description = '' OR LENGTH(description) < 50)
 		ORDER BY created_at DESC
-		LIMIT 500
 	`
 
 	rows, err := s.db.Query(query)
@@ -706,7 +714,6 @@ func (s *Scheduler) EnrichExistingTasks() error {
 			FROM messages
 			WHERE thread_id = ?
 			ORDER BY ts DESC
-			LIMIT 50
 		`
 
 		msgRows, err := s.db.Query(messagesQuery, info.threadID)
