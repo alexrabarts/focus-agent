@@ -131,6 +131,17 @@ type LLMCache struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// Priority represents a strategic priority
+type Priority struct {
+	ID        string     `json:"id"`
+	Type      string     `json:"type"`       // okr, focus_area, project, stakeholder
+	Value     string     `json:"value"`      // The actual priority text
+	Active    bool       `json:"active"`     // Whether this priority is currently active
+	CreatedAt time.Time  `json:"created_at"` // When this priority was added
+	ExpiresAt *time.Time `json:"expires_at"` // Optional expiration date
+	Notes     string     `json:"notes"`      // Optional notes about this priority
+}
+
 // SaveMessage inserts or updates a message
 func (db *DB) SaveMessage(msg *Message) error {
 	labelsJSON, _ := json.Marshal(msg.Labels)
@@ -736,6 +747,129 @@ func (db *DB) RecalculateThreadPriorities() error {
 			continue
 		}
 		updated++
+	}
+
+	return nil
+}
+
+// AddPriority adds a new priority to the database
+func (db *DB) AddPriority(priorityType, value, notes string) (*Priority, error) {
+	id := fmt.Sprintf("%s-%d", priorityType, time.Now().Unix())
+	createdAt := time.Now().Unix()
+
+	query := `
+		INSERT INTO priorities (id, type, value, active, created_at, notes)
+		VALUES (?, ?, ?, true, ?, ?)
+	`
+
+	_, err := db.Exec(query, id, priorityType, value, createdAt, notes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add priority: %w", err)
+	}
+
+	return &Priority{
+		ID:        id,
+		Type:      priorityType,
+		Value:     value,
+		Active:    true,
+		CreatedAt: time.Unix(createdAt, 0),
+		Notes:     notes,
+	}, nil
+}
+
+// GetActivePriorities returns all active priorities grouped by type
+func (db *DB) GetActivePriorities() (map[string][]string, error) {
+	query := `
+		SELECT type, value
+		FROM priorities
+		WHERE active = true
+		  AND (expires_at IS NULL OR expires_at > ?)
+		ORDER BY type, created_at
+	`
+
+	rows, err := db.Query(query, time.Now().Unix())
+	if err != nil {
+		return nil, fmt.Errorf("failed to query priorities: %w", err)
+	}
+	defer rows.Close()
+
+	priorities := make(map[string][]string)
+	for rows.Next() {
+		var priorityType, value string
+		if err := rows.Scan(&priorityType, &value); err != nil {
+			return nil, fmt.Errorf("failed to scan priority: %w", err)
+		}
+
+		priorities[priorityType] = append(priorities[priorityType], value)
+	}
+
+	return priorities, nil
+}
+
+// GetAllPriorities returns all priorities (including inactive)
+func (db *DB) GetAllPriorities() ([]*Priority, error) {
+	query := `
+		SELECT id, type, value, active, created_at, expires_at, notes
+		FROM priorities
+		ORDER BY type, active DESC, created_at DESC
+	`
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query priorities: %w", err)
+	}
+	defer rows.Close()
+
+	var priorities []*Priority
+	for rows.Next() {
+		p := &Priority{}
+		var createdTS, expiresTS sql.NullInt64
+
+		if err := rows.Scan(&p.ID, &p.Type, &p.Value, &p.Active, &createdTS, &expiresTS, &p.Notes); err != nil {
+			return nil, fmt.Errorf("failed to scan priority: %w", err)
+		}
+
+		if createdTS.Valid {
+			p.CreatedAt = time.Unix(createdTS.Int64, 0)
+		}
+		if expiresTS.Valid {
+			t := time.Unix(expiresTS.Int64, 0)
+			p.ExpiresAt = &t
+		}
+
+		priorities = append(priorities, p)
+	}
+
+	return priorities, nil
+}
+
+// DeactivatePriority marks a priority as inactive
+func (db *DB) DeactivatePriority(id string) error {
+	query := `UPDATE priorities SET active = false WHERE id = ?`
+	result, err := db.Exec(query, id)
+	if err != nil {
+		return fmt.Errorf("failed to deactivate priority: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("priority not found: %s", id)
+	}
+
+	return nil
+}
+
+// SetPriorityExpiration sets an expiration date for a priority
+func (db *DB) SetPriorityExpiration(id string, expiresAt time.Time) error {
+	query := `UPDATE priorities SET expires_at = ? WHERE id = ?`
+	result, err := db.Exec(query, expiresAt.Unix(), id)
+	if err != nil {
+		return fmt.Errorf("failed to set expiration: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("priority not found: %s", id)
 	}
 
 	return nil

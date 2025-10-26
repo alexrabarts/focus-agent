@@ -25,6 +25,7 @@ type Client interface {
 	SummarizeThread(ctx context.Context, messages []*db.Message) (string, error)
 	SummarizeThreadWithModelSelection(ctx context.Context, messages []*db.Message, metadata ThreadMetadata) (string, error)
 	ExtractTasks(ctx context.Context, content string) ([]*db.Task, error)
+	ExtractTasksFromMessages(ctx context.Context, content string, messages []*db.Message) ([]*db.Task, error)
 	EnrichTaskDescription(ctx context.Context, task *db.Task, messages []*db.Message) (string, error)
 	EvaluateStrategicAlignment(ctx context.Context, task *db.Task, priorities *config.Priorities) (*StrategicAlignmentResult, error)
 	DraftReply(ctx context.Context, thread []*db.Message, goal string) (string, error)
@@ -404,7 +405,38 @@ func (g *GeminiClient) SummarizeThreadWithModelSelection(ctx context.Context, me
 
 // ExtractTasks extracts action items from content
 func (g *GeminiClient) ExtractTasks(ctx context.Context, content string) ([]*db.Task, error) {
-	prompt := g.buildTaskExtractionPrompt(content)
+	return g.ExtractTasksFromMessages(ctx, content, nil)
+}
+
+// ExtractTasksFromMessages extracts action items from content with message context
+func (g *GeminiClient) ExtractTasksFromMessages(ctx context.Context, content string, messages []*db.Message) ([]*db.Task, error) {
+	// Determine if this is a sent email thread
+	isSentEmail := false
+	var recipients []string
+	userEmail := g.config.Google.UserEmail
+
+	if len(messages) > 0 && userEmail != "" {
+		// Check the most recent message to determine direction
+		lastMsg := messages[len(messages)-1]
+		if strings.Contains(lastMsg.From, userEmail) {
+			isSentEmail = true
+			// Parse recipients from To field
+			if lastMsg.To != "" {
+				// Split by comma and clean up
+				for _, r := range strings.Split(lastMsg.To, ",") {
+					recipients = append(recipients, strings.TrimSpace(r))
+				}
+			}
+		}
+	}
+
+	// Choose appropriate prompt based on email direction
+	var prompt string
+	if isSentEmail {
+		prompt = g.buildSentEmailTaskPrompt(content, recipients)
+	} else {
+		prompt = g.buildTaskExtractionPrompt(content)
+	}
 
 	// Check cache
 	hash := g.hashPrompt(prompt)
@@ -786,6 +818,50 @@ Format as a numbered list. Example:
 Only extract tasks for me (%s). Skip tasks for other people.
 
 Tasks:`, userEmail, userEmail, content, userEmail)
+}
+
+// buildSentEmailTaskPrompt creates a prompt for extracting self-commitments from sent emails
+func (g *GeminiClient) buildSentEmailTaskPrompt(content string, recipients []string) string {
+	userEmail := g.config.Google.UserEmail
+	if userEmail == "" {
+		userEmail = "the user"
+	}
+
+	recipientList := "others"
+	if len(recipients) > 0 {
+		recipientList = strings.Join(recipients, ", ")
+	}
+
+	return fmt.Sprintf(`Extract commitments and promises I made in this sent email to %s.
+
+IMPORTANT RULES:
+- ONLY extract commitments where I (%s) promised or committed to do something
+- Look for commitment patterns like:
+  * "I will" / "I'll"
+  * "I can" / "I'll make sure"
+  * "Let me" / "I'm going to"
+  * "I promise" / "I commit to"
+  * "I'll send" / "I'll get back to you"
+  * "I'll have it ready"
+- Include delivery promises (e.g., "I'll send the report")
+- Include action promises (e.g., "I'll review this")
+- Include timeline promises (e.g., "I'll get back to you by Friday")
+- SKIP general statements that aren't commitments (e.g., "That sounds good")
+
+For each commitment, provide:
+- Title (brief description of what I committed to)
+- Recipient (from: %s)
+- Due date/urgency (if mentioned, otherwise leave blank)
+- Priority (High/Medium/Low based on context and urgency)
+
+Content:
+%s
+
+Format as a numbered list. Example:
+1. Title: Send Q3 report to Sarah | Recipient: sarah@example.com | Due: Friday EOD | Priority: High
+2. Title: Review proposal for team | Recipient: team@example.com | Due: This week | Priority: Medium
+
+Extract my commitments:`, recipientList, userEmail, recipientList, content)
 }
 
 // buildReplyPrompt creates a prompt for drafting replies

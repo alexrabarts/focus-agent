@@ -156,6 +156,32 @@ func (p *Planner) calculateStrategicAlignment(task *db.Task) float64 {
 	return score
 }
 
+// GetPriorities returns priorities from database, falling back to config
+func (p *Planner) GetPriorities() *config.Priorities {
+	// Try loading from database first
+	dbPriorities, err := p.db.GetActivePriorities()
+	if err != nil {
+		log.Printf("Failed to load priorities from database, falling back to config: %v", err)
+		return &p.config.Priorities
+	}
+
+	// Check if database has priorities
+	if len(dbPriorities) == 0 {
+		log.Printf("No priorities in database, using config")
+		return &p.config.Priorities
+	}
+
+	// Convert database format to config.Priorities format
+	priorities := &config.Priorities{
+		OKRs:            dbPriorities["okr"],
+		FocusAreas:      dbPriorities["focus_area"],
+		KeyStakeholders: dbPriorities["stakeholder"],
+		KeyProjects:     dbPriorities["project"],
+	}
+
+	return priorities
+}
+
 // CalculateStrategicAlignmentWithMatches scores alignment and returns which priorities matched
 // Uses LLM for semantic understanding rather than keyword matching
 func (p *Planner) CalculateStrategicAlignmentWithMatches(task *db.Task) (float64, *db.PriorityMatches) {
@@ -165,9 +191,12 @@ func (p *Planner) CalculateStrategicAlignmentWithMatches(task *db.Task) (float64
 		Projects:   []string{},
 	}
 
+	// Get priorities (database-first, config fallback)
+	priorities := p.GetPriorities()
+
 	// Use LLM to evaluate strategic alignment
 	ctx := context.Background()
-	result, err := p.llm.EvaluateStrategicAlignment(ctx, task, &p.config.Priorities)
+	result, err := p.llm.EvaluateStrategicAlignment(ctx, task, priorities)
 	if err != nil {
 		log.Printf("Failed to evaluate strategic alignment for task %s: %v", task.ID, err)
 		// Fall back to zero score if LLM fails
@@ -182,7 +211,7 @@ func (p *Planner) CalculateStrategicAlignmentWithMatches(task *db.Task) (float64
 
 	// Check if task source is from key stakeholders (keep this logic as it's not semantic)
 	if !matches.KeyStakeholder {
-		for _, stakeholder := range p.config.Priorities.KeyStakeholders {
+		for _, stakeholder := range priorities.KeyStakeholders {
 			if task.SourceID != "" && strings.Contains(strings.ToLower(task.SourceID), strings.ToLower(stakeholder)) {
 				matches.KeyStakeholder = true
 				break

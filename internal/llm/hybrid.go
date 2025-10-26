@@ -157,46 +157,14 @@ func (h *HybridClient) SummarizeThreadWithModelSelection(ctx context.Context, me
 
 // ExtractTasks extracts action items (Claude primary, Gemini fallback)
 func (h *HybridClient) ExtractTasks(ctx context.Context, content string) ([]*db.Task, error) {
-	// Build prompt
-	prompt := h.gemini.buildTaskExtractionPrompt(content)
+	return h.ExtractTasksFromMessages(ctx, content, nil)
+}
 
-	// Check cache
-	hash := h.gemini.hashPrompt(prompt)
-	cached, err := h.db.GetCachedResponse(hash)
-	if err == nil && cached != nil {
-		log.Printf("Using cached task extraction")
-		return h.gemini.filterTasksForUser(h.gemini.parseTasksFromResponse(cached.Response)), nil
-	}
-
-	// Try Claude CLI first
-	startTime := time.Now()
-	response, err := h.callClaude(ctx, prompt)
-	if err == nil {
-		log.Printf("✓ Claude CLI succeeded for ExtractTasks (%.2fs)", time.Since(startTime).Seconds())
-
-		// Cache the response
-		tokens := h.gemini.estimateTokens(prompt + response)
-		cache := &db.LLMCache{
-			Hash:      hash,
-			Prompt:    prompt,
-			Response:  response,
-			Model:     "claude-haiku",
-			Tokens:    tokens,
-			ExpiresAt: time.Now().Add(h.gemini.cacheTTL),
-		}
-		h.db.SaveCachedResponse(cache)
-
-		// Log usage
-		h.db.LogUsage("claude", "extract_tasks", tokens, 0, time.Since(startTime), nil)
-
-		// Parse and filter tasks
-		tasks := h.gemini.parseTasksFromResponse(response)
-		return h.gemini.filterTasksForUser(tasks), nil
-	}
-
-	// Fallback to Gemini
-	log.Printf("⚠ Claude CLI failed, falling back to Gemini: %v", err)
-	return h.gemini.ExtractTasks(ctx, content)
+func (h *HybridClient) ExtractTasksFromMessages(ctx context.Context, content string, messages []*db.Message) ([]*db.Task, error) {
+	// Delegate to Gemini client which handles sent email detection
+	// For now, we'll use Gemini directly for task extraction with message context
+	// TODO: Consider adding Claude/Ollama fallback for this method
+	return h.gemini.ExtractTasksFromMessages(ctx, content, messages)
 }
 
 // EnrichTaskDescription generates rich contextual descriptions (Ollama -> Claude CLI -> Gemini fallback)

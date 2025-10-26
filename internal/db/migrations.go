@@ -195,6 +195,58 @@ func GetMigrations() []Migration {
 				return nil
 			},
 		},
+		{
+			Version: 4,
+			Name:    "create_priorities_table",
+			Up: func(tx *sql.Tx) error {
+				// Check if priorities table exists
+				var count int
+				err := tx.QueryRow(`
+					SELECT COUNT(*)
+					FROM information_schema.tables
+					WHERE table_name='priorities'
+				`).Scan(&count)
+				if err != nil {
+					return fmt.Errorf("failed to check priorities table: %w", err)
+				}
+
+				// Create priorities table if it doesn't exist
+				if count == 0 {
+					_, err = tx.Exec(`
+						CREATE TABLE priorities (
+							id VARCHAR PRIMARY KEY,
+							type VARCHAR NOT NULL,
+							value VARCHAR NOT NULL,
+							active BOOLEAN DEFAULT true,
+							created_at BIGINT NOT NULL,
+							expires_at BIGINT DEFAULT NULL,
+							notes VARCHAR DEFAULT NULL
+						);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create priorities table: %w", err)
+					}
+
+					// Create index for active priorities lookup
+					_, err = tx.Exec(`
+						CREATE INDEX IF NOT EXISTS idx_priorities_active ON priorities(active, type);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create priorities index: %w", err)
+					}
+				}
+
+				return nil
+			},
+			Down: func(tx *sql.Tx) error {
+				_, err := tx.Exec(`DROP INDEX IF EXISTS idx_priorities_active`)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`DROP TABLE IF EXISTS priorities`)
+				return err
+			},
+		},
 		// Add future migrations here
 	}
 }

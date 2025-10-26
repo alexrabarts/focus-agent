@@ -33,6 +33,7 @@ var (
 	enrichTasks         = flag.Bool("enrich-tasks", false, "Enrich descriptions for existing email-extracted tasks with AI context")
 	cleanupOthers       = flag.Bool("cleanup-other-tasks", false, "Delete tasks assigned to other people (one-time cleanup)")
 	recalculatePriorities = flag.Bool("recalculate-priorities", false, "Recalculate priority scores and populate matched priorities for all pending tasks")
+	migratePriorities   = flag.Bool("migrate-priorities", false, "Migrate strategic priorities from config.yaml to database (one-time migration)")
 	migrateToDuckDB     = flag.String("migrate-to-duckdb", "", "Migrate SQLite database to DuckDB (provide new DuckDB path)")
 	version             = flag.Bool("version", false, "Show version")
 )
@@ -166,6 +167,63 @@ func main() {
 			log.Fatalf("Failed to recalculate priorities: %v", err)
 		}
 		log.Println("Priority recalculation complete!")
+		os.Exit(0)
+	}
+
+	// Handle migrate-priorities mode
+	if *migratePriorities {
+		log.Println("Migrating strategic priorities from config.yaml to database...")
+
+		// Check if priorities already exist in database
+		existingPriorities, err := database.GetAllPriorities()
+		if err != nil {
+			log.Fatalf("Failed to check existing priorities: %v", err)
+		}
+
+		if len(existingPriorities) > 0 {
+			log.Printf("Database already contains %d priorities. Migration skipped.", len(existingPriorities))
+			log.Println("To re-import, manually delete existing priorities from the database first.")
+			os.Exit(0)
+		}
+
+		// Migrate OKRs
+		for _, okr := range cfg.Priorities.OKRs {
+			if _, err := database.AddPriority("okr", okr, "Migrated from config.yaml"); err != nil {
+				log.Printf("Failed to add OKR '%s': %v", okr, err)
+			} else {
+				log.Printf("Added OKR: %s", okr)
+			}
+		}
+
+		// Migrate focus areas
+		for _, area := range cfg.Priorities.FocusAreas {
+			if _, err := database.AddPriority("focus_area", area, "Migrated from config.yaml"); err != nil {
+				log.Printf("Failed to add focus area '%s': %v", area, err)
+			} else {
+				log.Printf("Added focus area: %s", area)
+			}
+		}
+
+		// Migrate key stakeholders
+		for _, stakeholder := range cfg.Priorities.KeyStakeholders {
+			if _, err := database.AddPriority("stakeholder", stakeholder, "Migrated from config.yaml"); err != nil {
+				log.Printf("Failed to add stakeholder '%s': %v", stakeholder, err)
+			} else {
+				log.Printf("Added stakeholder: %s", stakeholder)
+			}
+		}
+
+		// Migrate key projects
+		for _, project := range cfg.Priorities.KeyProjects {
+			if _, err := database.AddPriority("project", project, "Migrated from config.yaml"); err != nil {
+				log.Printf("Failed to add project '%s': %v", project, err)
+			} else {
+				log.Printf("Added project: %s", project)
+			}
+		}
+
+		log.Println("Priority migration complete!")
+		log.Println("Priorities are now loaded from database. You can update config.yaml comments to reflect this change.")
 		os.Exit(0)
 	}
 

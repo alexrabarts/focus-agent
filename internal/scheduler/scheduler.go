@@ -352,8 +352,8 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 		return fmt.Errorf("failed to summarize thread %s: %w", threadID, err)
 	}
 
-	// Extract tasks
-	tasks, err := s.llm.ExtractTasks(s.ctx, summary)
+	// Extract tasks (pass messages for sent email detection)
+	tasks, err := s.llm.ExtractTasksFromMessages(s.ctx, summary, messages)
 	if err != nil {
 		log.Printf("Failed to extract tasks from thread %s: %v", threadID, err)
 	}
@@ -549,8 +549,8 @@ func (s *Scheduler) ProcessNewMessages() {
 			continue
 		}
 
-		// Extract tasks
-		tasks, err := s.llm.ExtractTasks(s.ctx, summary)
+		// Extract tasks (pass messages for sent email detection)
+		tasks, err := s.llm.ExtractTasksFromMessages(s.ctx, summary, messages)
 		if err != nil {
 			log.Printf("Failed to extract tasks from thread %s: %v", threadID, err)
 		}
@@ -856,8 +856,15 @@ func (s *Scheduler) ReprocessAITasks() error {
 	for i, thread := range threads {
 		log.Printf("Processing thread %d/%d: %s", i+1, len(threads), thread.ID)
 
-		// Extract tasks from summary
-		tasks, err := s.llm.ExtractTasks(s.ctx, thread.Summary)
+		// Get messages for this thread for sent email detection
+		messages, err := s.db.GetThreadMessages(thread.ID)
+		if err != nil {
+			log.Printf("Failed to get messages for thread %s: %v", thread.ID, err)
+			messages = nil // Continue without messages
+		}
+
+		// Extract tasks from summary (pass messages for sent email detection)
+		tasks, err := s.llm.ExtractTasksFromMessages(s.ctx, thread.Summary, messages)
 		if err != nil {
 			log.Printf("Failed to extract tasks from thread %s: %v", thread.ID, err)
 			continue
