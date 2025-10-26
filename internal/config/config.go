@@ -143,6 +143,17 @@ func Load(path string) (*Config, error) {
 		path = filepath.Join(home, path[2:])
 	}
 
+	// Try XDG config directory as fallback if primary path doesn't exist
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			xdgPath := filepath.Join(home, ".config", "focus-agent", "config.yaml")
+			if _, err := os.Stat(xdgPath); err == nil {
+				path = xdgPath
+			}
+		}
+	}
+
 	// Create default config if it doesn't exist
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if err := createDefaultConfig(path); err != nil {
