@@ -243,13 +243,16 @@ func (h *HybridClient) ExtractTasksFromMessages(ctx context.Context, content str
 	// Try Ollama first (free, unlimited local processing)
 	if h.ollama != nil {
 		tasks, err := h.ollama.ExtractTasks(ctx, content, userEmail)
-		if err == nil && len(tasks) > 0 {
-			log.Printf("Extracted %d tasks using Ollama (qwen2.5)", len(tasks))
+		if err == nil {
+			// Ollama succeeded - return results even if empty (no tasks found)
+			if len(tasks) > 0 {
+				log.Printf("Extracted %d tasks using Ollama (qwen2.5)", len(tasks))
+			} else {
+				log.Printf("Ollama processed thread successfully - no tasks found")
+			}
 			return tasks, nil
 		}
-		if err != nil {
-			log.Printf("Ollama task extraction failed, falling back to Claude: %v", err)
-		}
+		log.Printf("Ollama task extraction failed, falling back to Claude: %v", err)
 	}
 
 	// Try Claude CLI second (would need implementation for task parsing)

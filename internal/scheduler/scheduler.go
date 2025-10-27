@@ -634,7 +634,8 @@ func (s *Scheduler) EnrichExistingTasks() error {
 	// Query tasks from gmail source that have no description or short descriptions
 	query := `
 		SELECT id, source, source_id, title, description, project, due_ts,
-		       impact, urgency, effort, stakeholder, score, status
+		       impact, urgency, effort, stakeholder, score, status,
+		       metadata, matched_priorities, created_at, updated_at, completed_at
 		FROM tasks
 		WHERE source = 'gmail'
 		  AND status = 'pending'
@@ -656,13 +657,15 @@ func (s *Scheduler) EnrichExistingTasks() error {
 	var tasksToEnrich []taskInfo
 	for rows.Next() {
 		task := &db.Task{}
-		var dueTS sql.NullInt64
-		var description sql.NullString
+		var dueTS, completedTS sql.NullInt64
+		var description, metadata, matchedPriorities sql.NullString
+		var createdAt, updatedAt int64
 
 		err := rows.Scan(&task.ID, &task.Source, &task.SourceID,
 			&task.Title, &description, &task.Project, &dueTS,
 			&task.Impact, &task.Urgency, &task.Effort, &task.Stakeholder,
-			&task.Score, &task.Status)
+			&task.Score, &task.Status,
+			&metadata, &matchedPriorities, &createdAt, &updatedAt, &completedTS)
 		if err != nil {
 			log.Printf("Failed to scan task: %v", err)
 			continue
@@ -674,6 +677,18 @@ func (s *Scheduler) EnrichExistingTasks() error {
 		if dueTS.Valid {
 			due := time.Unix(dueTS.Int64, 0)
 			task.DueTS = &due
+		}
+		if metadata.Valid {
+			task.Metadata = metadata.String
+		}
+		if matchedPriorities.Valid {
+			task.MatchedPriorities = matchedPriorities.String
+		}
+		task.CreatedAt = time.Unix(createdAt, 0)
+		task.UpdatedAt = time.Unix(updatedAt, 0)
+		if completedTS.Valid {
+			completed := time.Unix(completedTS.Int64, 0)
+			task.CompletedAt = &completed
 		}
 
 		tasksToEnrich = append(tasksToEnrich, taskInfo{
