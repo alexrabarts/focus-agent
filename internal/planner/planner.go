@@ -469,6 +469,7 @@ func (p *Planner) CompleteTask(ctx context.Context, taskID string) error {
 	}
 
 	// If task is from Google Tasks, sync completion back to Google
+	log.Printf("Task completion: source=%s, source_id=%s, metadata=%s", task.Source, task.SourceID, task.Metadata)
 	if task.Source == "gtasks" && task.SourceID != "" {
 		// Parse metadata to get list name
 		var metadata map[string]string

@@ -364,6 +364,11 @@ func (m Model) formatLastRefresh() string {
 }
 
 func Start(database *db.DB, clients *google.Clients, llmClient llm.Client, plannerService *planner.Planner, cfg *config.Config) error {
+	// Validate remote mode configuration
+	if cfg.Remote.URL != "" && cfg.Remote.AuthKey == "" {
+		return fmt.Errorf("remote mode is configured (url=%s) but auth_key is missing\n\nPlease set FOCUS_AGENT_AUTH_KEY environment variable in ~/.env and restart your shell", cfg.Remote.URL)
+	}
+
 	// Create log buffer to capture background logs
 	logBuffer := NewLogBuffer(10) // Keep last 10 log messages
 
