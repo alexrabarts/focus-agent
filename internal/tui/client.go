@@ -79,7 +79,7 @@ type ThreadResponse struct {
 	ID             string  `json:"id"`
 	LastHistoryID  string  `json:"last_history_id"`
 	Summary        string  `json:"summary"`
-	SummaryHash    string  `json:"summary_hash"`
+	SummaryHash    *string `json:"summary_hash,omitempty"`
 	TaskCount      int     `json:"task_count"`
 	NextFollowupTS *string `json:"next_followup_ts,omitempty"`
 	LastSynced     string  `json:"last_synced"`

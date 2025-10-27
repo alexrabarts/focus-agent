@@ -29,7 +29,7 @@ type Thread struct {
 	ID             string     `json:"id"`
 	LastHistoryID  string     `json:"last_history_id"`
 	Summary        string     `json:"summary"`
-	SummaryHash    string     `json:"summary_hash"`
+	SummaryHash    *string    `json:"summary_hash,omitempty"`
 	TaskCount      int        `json:"task_count"`
 	PriorityScore  float64    `json:"priority_score"`
 	RelevantToUser bool       `json:"relevant_to_user"`
