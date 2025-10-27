@@ -277,7 +277,7 @@ func (m *TasksModel) View() string {
 		b.WriteString(headerStyle.Render("🔴 High Priority") + "\n")
 
 		for _, task := range highPriority {
-			b.WriteString(m.renderTask(task, taskIndex == m.cursor))
+			b.WriteString(m.renderTask(task, taskIndex+1, taskIndex == m.cursor))
 			taskIndex++
 		}
 		b.WriteString("\n")
@@ -292,7 +292,7 @@ func (m *TasksModel) View() string {
 		b.WriteString(headerStyle.Render("🟡 Medium Priority") + "\n")
 
 		for _, task := range mediumPriority {
-			b.WriteString(m.renderTask(task, taskIndex == m.cursor))
+			b.WriteString(m.renderTask(task, taskIndex+1, taskIndex == m.cursor))
 			taskIndex++
 		}
 		b.WriteString("\n")
@@ -307,7 +307,7 @@ func (m *TasksModel) View() string {
 		b.WriteString(headerStyle.Render("🟢 Low Priority") + "\n")
 
 		for _, task := range lowPriority {
-			b.WriteString(m.renderTask(task, taskIndex == m.cursor))
+			b.WriteString(m.renderTask(task, taskIndex+1, taskIndex == m.cursor))
 			taskIndex++
 		}
 	}
@@ -329,7 +329,7 @@ func (m *TasksModel) View() string {
 	return m.viewport.View()
 }
 
-func (m TasksModel) renderTask(task *db.Task, selected bool) string {
+func (m TasksModel) renderTask(task *db.Task, taskNumber int, selected bool) string {
 	taskStyle := lipgloss.NewStyle().
 		Padding(0, 2)
 
@@ -344,8 +344,8 @@ func (m TasksModel) renderTask(task *db.Task, selected bool) string {
 
 	// Truncate title if too long
 	title := task.Title
-	if len(title) > 60 {
-		title = title[:57] + "..."
+	if len(title) > 55 {
+		title = title[:52] + "..."
 	}
 
 	// Show project/source
@@ -356,7 +356,7 @@ func (m TasksModel) renderTask(task *db.Task, selected bool) string {
 		meta = fmt.Sprintf(" [%s]", task.Source)
 	}
 
-	taskText := fmt.Sprintf("%s%s%s - Score: %.1f", cursor, title, meta, task.Score)
+	taskText := fmt.Sprintf("%s%d. %s%s - Score: %.1f", cursor, taskNumber, title, meta, task.Score)
 
 	if selected {
 		return selectedStyle.Render(taskText) + "\n"
@@ -375,7 +375,8 @@ func (m *TasksModel) renderTaskDetail() string {
 		Padding(0, 1).
 		Width(90)
 
-	b.WriteString(headerStyle.Render(fmt.Sprintf("✅ %s", task.Title)) + "\n\n")
+	taskNumber := m.cursor + 1
+	b.WriteString(headerStyle.Render(fmt.Sprintf("✅ Task #%d: %s", taskNumber, task.Title)) + "\n\n")
 
 	// Task Information section
 	infoTitleStyle := lipgloss.NewStyle().
