@@ -475,15 +475,18 @@ func (p *Planner) CompleteTask(ctx context.Context, taskID string) error {
 		var metadata map[string]string
 		if err := json.Unmarshal([]byte(task.Metadata), &metadata); err == nil {
 			listName := metadata["list"]
+			log.Printf("Looking for Google Tasks list: %s", listName)
 
 			// Get task lists to find the list ID
 			lists, err := p.google.Tasks.GetTaskLists(ctx)
 			if err != nil {
 				log.Printf("Warning: failed to get task lists for Google Tasks sync: %v", err)
 			} else {
+				log.Printf("Found %d task lists", len(lists))
 				// Find list ID by name
 				var listID string
 				for _, list := range lists {
+					log.Printf("Checking list: title=%s, id=%s", list.Title, list.Id)
 					if list.Title == listName {
 						listID = list.Id
 						break
@@ -491,6 +494,7 @@ func (p *Planner) CompleteTask(ctx context.Context, taskID string) error {
 				}
 
 				if listID != "" {
+					log.Printf("Found list ID: %s, completing task: %s", listID, task.SourceID)
 					// Sync completion to Google Tasks
 					if err := p.google.Tasks.CompleteTask(ctx, listID, task.SourceID); err != nil {
 						log.Printf("Warning: failed to sync task completion to Google Tasks: %v", err)

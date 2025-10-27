@@ -231,6 +231,7 @@ func (t *TasksClient) UpdateTask(ctx context.Context, listID, taskID string, upd
 // CompleteTask marks a task as completed
 func (t *TasksClient) CompleteTask(ctx context.Context, listID, taskID string) error {
 	task := &tasks.Task{
+		Id:     taskID,
 		Status: "completed",
 	}
 
@@ -245,6 +246,7 @@ func (t *TasksClient) CompleteTask(ctx context.Context, listID, taskID string) e
 // UncompleteTask marks a task as needing action (uncompletes it)
 func (t *TasksClient) UncompleteTask(ctx context.Context, listID, taskID string) error {
 	task := &tasks.Task{
+		Id:     taskID,
 		Status: "needsAction",
 	}
 
