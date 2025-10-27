@@ -454,11 +454,53 @@ func (p *Planner) formatPlan(tasks []*db.Task, events []*db.Event) string {
 
 // CompleteTask marks a task as completed and adjusts scores
 func (p *Planner) CompleteTask(ctx context.Context, taskID string) error {
-	now := time.Now()
-	query := `UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?`
+	// First, get the task to check if it's from Google Tasks
+	var task db.Task
+	query := `SELECT source, source_id, metadata FROM tasks WHERE id = ?`
+	if err := p.db.QueryRow(query, taskID).Scan(&task.Source, &task.SourceID, &task.Metadata); err != nil {
+		return fmt.Errorf("failed to get task: %w", err)
+	}
 
-	if _, err := p.db.Exec(query, now.Unix(), taskID); err != nil {
+	now := time.Now()
+	updateQuery := `UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?`
+
+	if _, err := p.db.Exec(updateQuery, now.Unix(), taskID); err != nil {
 		return fmt.Errorf("failed to complete task: %w", err)
+	}
+
+	// If task is from Google Tasks, sync completion back to Google
+	if task.Source == "gtasks" && task.SourceID != "" {
+		// Parse metadata to get list name
+		var metadata map[string]string
+		if err := json.Unmarshal([]byte(task.Metadata), &metadata); err == nil {
+			listName := metadata["list"]
+
+			// Get task lists to find the list ID
+			lists, err := p.google.Tasks.GetTaskLists(ctx)
+			if err != nil {
+				log.Printf("Warning: failed to get task lists for Google Tasks sync: %v", err)
+			} else {
+				// Find list ID by name
+				var listID string
+				for _, list := range lists {
+					if list.Title == listName {
+						listID = list.Id
+						break
+					}
+				}
+
+				if listID != "" {
+					// Sync completion to Google Tasks
+					if err := p.google.Tasks.CompleteTask(ctx, listID, task.SourceID); err != nil {
+						log.Printf("Warning: failed to sync task completion to Google Tasks: %v", err)
+					} else {
+						log.Printf("Synced task completion to Google Tasks: %s", task.SourceID)
+					}
+				} else {
+					log.Printf("Warning: could not find Google Tasks list: %s", listName)
+				}
+			}
+		}
 	}
 
 	// Trigger re-prioritization
@@ -467,10 +509,52 @@ func (p *Planner) CompleteTask(ctx context.Context, taskID string) error {
 
 // UncompleteTask marks a task as pending (undo completion)
 func (p *Planner) UncompleteTask(ctx context.Context, taskID string) error {
-	query := `UPDATE tasks SET status = 'pending', completed_at = NULL WHERE id = ?`
+	// First, get the task to check if it's from Google Tasks
+	var task db.Task
+	query := `SELECT source, source_id, metadata FROM tasks WHERE id = ?`
+	if err := p.db.QueryRow(query, taskID).Scan(&task.Source, &task.SourceID, &task.Metadata); err != nil {
+		return fmt.Errorf("failed to get task: %w", err)
+	}
 
-	if _, err := p.db.Exec(query, taskID); err != nil {
+	updateQuery := `UPDATE tasks SET status = 'pending', completed_at = NULL WHERE id = ?`
+
+	if _, err := p.db.Exec(updateQuery, taskID); err != nil {
 		return fmt.Errorf("failed to uncomplete task: %w", err)
+	}
+
+	// If task is from Google Tasks, sync uncomplete back to Google
+	if task.Source == "gtasks" && task.SourceID != "" {
+		// Parse metadata to get list name
+		var metadata map[string]string
+		if err := json.Unmarshal([]byte(task.Metadata), &metadata); err == nil {
+			listName := metadata["list"]
+
+			// Get task lists to find the list ID
+			lists, err := p.google.Tasks.GetTaskLists(ctx)
+			if err != nil {
+				log.Printf("Warning: failed to get task lists for Google Tasks sync: %v", err)
+			} else {
+				// Find list ID by name
+				var listID string
+				for _, list := range lists {
+					if list.Title == listName {
+						listID = list.Id
+						break
+					}
+				}
+
+				if listID != "" {
+					// Sync uncomplete to Google Tasks
+					if err := p.google.Tasks.UncompleteTask(ctx, listID, task.SourceID); err != nil {
+						log.Printf("Warning: failed to sync task uncomplete to Google Tasks: %v", err)
+					} else {
+						log.Printf("Synced task uncomplete to Google Tasks: %s", task.SourceID)
+					}
+				} else {
+					log.Printf("Warning: could not find Google Tasks list: %s", listName)
+				}
+			}
+		}
 	}
 
 	// Trigger re-prioritization

@@ -242,6 +242,20 @@ func (t *TasksClient) CompleteTask(ctx context.Context, listID, taskID string) e
 	return nil
 }
 
+// UncompleteTask marks a task as needing action (uncompletes it)
+func (t *TasksClient) UncompleteTask(ctx context.Context, listID, taskID string) error {
+	task := &tasks.Task{
+		Status: "needsAction",
+	}
+
+	_, err := t.Service.Tasks.Update(listID, taskID, task).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("failed to uncomplete task: %w", err)
+	}
+
+	return nil
+}
+
 // GetTaskLists retrieves all task lists
 func (t *TasksClient) GetTaskLists(ctx context.Context) ([]*tasks.TaskList, error) {
 	lists, err := t.Service.Tasklists.List().Context(ctx).Do()
