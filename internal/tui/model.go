@@ -302,7 +302,7 @@ func (m Model) renderFooter() string {
 		Foreground(lipgloss.Color("245")).
 		Padding(0, 1)
 
-	footer := "q: quit | ←/→: switch tabs | ↑/↓: navigate | enter: select"
+	footer := "q: quit | ←/→: switch tabs | ↑/↓: navigate | enter: select | c: complete task"
 
 	// Add status information
 	stats := m.statsModel.stats
