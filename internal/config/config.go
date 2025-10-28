@@ -114,6 +114,9 @@ type Limits struct {
 	UnreadOnly            bool `yaml:"unread_only"`
 	DaysOfHistory         int  `yaml:"days_of_history"`
 
+	// AI processing control
+	EnableAIProcessing    bool `yaml:"enable_ai_processing"`
+
 	// Drive limits
 	MaxDocumentsPerSync int `yaml:"max_documents_per_sync"`
 	DriveDaysOfHistory  int `yaml:"drive_days_of_history"`
@@ -344,6 +347,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Limits.MaxThreadsPerSync = 50
 	}
 	// MaxAIProcessingPerRun: 0 means unlimited (using local qwen2.5 processing)
+	// EnableAIProcessing defaults to true if not specified
 	if cfg.Limits.DaysOfHistory == 0 {
 		cfg.Limits.DaysOfHistory = 7
 	}

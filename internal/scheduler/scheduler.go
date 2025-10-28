@@ -438,6 +438,12 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 
 // ProcessNewMessages processes new messages for summaries and task extraction
 func (s *Scheduler) ProcessNewMessages() {
+	// Check if AI processing is enabled
+	if !s.config.Limits.EnableAIProcessing {
+		log.Println("AI processing is disabled in config - skipping")
+		return
+	}
+
 	log.Println("Processing new messages with AI...")
 
 	// Get threads that need summarization
