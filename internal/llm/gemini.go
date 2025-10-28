@@ -594,32 +594,13 @@ func (g *GeminiClient) EvaluateStrategicAlignment(ctx context.Context, task *db.
 }
 
 // filterTasksForUser filters out tasks assigned to other specific people
+// NOTE: Filtering disabled - prompts are now more aggressive about extracting relevant tasks
 func (g *GeminiClient) filterTasksForUser(tasks []*db.Task) []*db.Task {
-	userEmail := strings.ToLower(g.config.Google.UserEmail)
-	filtered := make([]*db.Task, 0, len(tasks))
-
-	for _, task := range tasks {
-		stakeholder := strings.ToLower(strings.TrimSpace(task.Stakeholder))
-
-		// Keep task if stakeholder is:
-		// - empty (unassigned, assume for user)
-		// - "me" or "you" (explicitly for user)
-		// - matches user's email
-		// - contains user's email
-		if stakeholder == "" ||
-			stakeholder == "me" ||
-			stakeholder == "you" ||
-			stakeholder == userEmail ||
-			strings.Contains(stakeholder, userEmail) {
-			filtered = append(filtered, task)
-			continue
-		}
-
-		// Skip tasks assigned to other specific people
-		log.Printf("Filtering out task assigned to '%s': %s", task.Stakeholder, task.Title)
+	// No filtering - trust the LLM prompt to extract only relevant tasks
+	if len(tasks) > 0 {
+		log.Printf("Extracted %d tasks (no filtering applied)", len(tasks))
 	}
-
-	return filtered
+	return tasks
 }
 
 // DraftReply drafts a reply to an email
@@ -794,30 +775,32 @@ func (g *GeminiClient) buildTaskExtractionPrompt(content string) string {
 		userEmail = "the user"
 	}
 
-	return fmt.Sprintf(`Extract action items from this content that are FOR ME (%s) to do.
+	return fmt.Sprintf(`Extract action items from this content that I (%s) need to do or respond to.
 
 IMPORTANT RULES:
-- ONLY extract tasks where I (%s) am responsible or need to take action
-- SKIP tasks assigned to other specific people (e.g., "Andrew: do X", "Maria: review Y")
+- INCLUDE tasks where I am responsible or need to take action
+- INCLUDE implicit actions directed at me (e.g., "you should review", "recipient needs to", "please confirm")
+- INCLUDE invitations, meeting requests, and events I'm invited to
+- INCLUDE requests for my input, approval, or response
+- INCLUDE deadlines and due dates that affect me
 - INCLUDE tasks with no owner specified (assume they're for me)
-- INCLUDE tasks marked as "me", "you", or my email address
+- SKIP only tasks explicitly assigned to other specific people (e.g., "Andrew: do X", "Maria: review Y")
 
 For each task, provide:
-- Title (brief description)
-- Owner (if mentioned, use "me" if it's for me, otherwise the person's name/email)
+- Title (brief, actionable description)
+- Owner (use "me" for tasks assigned to me)
 - Due date/urgency (if mentioned)
-- Priority (High/Medium/Low based on context)
+- Priority (High/Medium/Low based on context and urgency)
 
 Content:
 %s
 
 Format as a numbered list. Example:
 1. Title: Review Q3 budget | Owner: me | Due: Friday | Priority: High
-2. Title: Send meeting notes | Owner: me | Due: Today | Priority: Medium
+2. Title: Attend M365 cyber resiliency event | Owner: me | Due: Oct 30 | Priority: Medium
+3. Title: Respond to meeting invitation | Owner: me | Due: This week | Priority: Medium
 
-Only extract tasks for me (%s). Skip tasks for other people.
-
-Tasks:`, userEmail, userEmail, content, userEmail)
+Tasks:`, userEmail, content)
 }
 
 // buildSentEmailTaskPrompt creates a prompt for extracting self-commitments from sent emails
