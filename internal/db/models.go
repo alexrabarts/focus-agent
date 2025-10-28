@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/alexrabarts/focus-agent/internal/config"
 )
 
 // Message represents an email message
@@ -871,6 +873,69 @@ func (db *DB) SetPriorityExpiration(id string, expiresAt time.Time) error {
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
 		return fmt.Errorf("priority not found: %s", id)
+	}
+
+	return nil
+}
+
+// UpdatePriorities replaces all priorities with the provided values
+// This deactivates old priorities and adds new ones
+func (db *DB) UpdatePriorities(priorities *config.Priorities) error {
+	// Begin transaction
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Deactivate all current priorities
+	_, err = tx.Exec(`UPDATE priorities SET active = false WHERE active = true`)
+	if err != nil {
+		return fmt.Errorf("failed to deactivate old priorities: %w", err)
+	}
+
+	// Helper to insert priorities of a given type
+	insertPriority := func(priorityType, value string) error {
+		id := fmt.Sprintf("%s-%d", priorityType, time.Now().UnixNano())
+		createdAt := time.Now().Unix()
+		_, err := tx.Exec(`
+			INSERT INTO priorities (id, type, value, active, created_at, notes)
+			VALUES (?, ?, ?, true, ?, 'Updated via API')
+		`, id, priorityType, value, createdAt)
+		return err
+	}
+
+	// Insert OKRs
+	for _, okr := range priorities.OKRs {
+		if err := insertPriority("okr", okr); err != nil {
+			return fmt.Errorf("failed to insert OKR: %w", err)
+		}
+	}
+
+	// Insert focus areas
+	for _, area := range priorities.FocusAreas {
+		if err := insertPriority("focus_area", area); err != nil {
+			return fmt.Errorf("failed to insert focus area: %w", err)
+		}
+	}
+
+	// Insert key projects
+	for _, project := range priorities.KeyProjects {
+		if err := insertPriority("project", project); err != nil {
+			return fmt.Errorf("failed to insert project: %w", err)
+		}
+	}
+
+	// Insert key stakeholders
+	for _, stakeholder := range priorities.KeyStakeholders {
+		if err := insertPriority("stakeholder", stakeholder); err != nil {
+			return fmt.Errorf("failed to insert stakeholder: %w", err)
+		}
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return nil

@@ -182,6 +182,11 @@ func (p *Planner) GetPriorities() *config.Priorities {
 	return priorities
 }
 
+// SavePriorities saves priorities to the database
+func (p *Planner) SavePriorities(priorities *config.Priorities) error {
+	return p.db.UpdatePriorities(priorities)
+}
+
 // CalculateStrategicAlignmentWithMatches scores alignment and returns which priorities matched
 // Uses LLM for semantic understanding rather than keyword matching
 func (p *Planner) CalculateStrategicAlignmentWithMatches(task *db.Task) (float64, *db.PriorityMatches) {

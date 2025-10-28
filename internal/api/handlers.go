@@ -3,9 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/alexrabarts/focus-agent/internal/config"
 )
 
 // Task response structure
@@ -190,14 +193,15 @@ func (s *Server) handlePriorities(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getPriorities(w http.ResponseWriter, r *http.Request) {
-	// Note: undoAvailable would need to be tracked in state
-	// For now, we'll return false since undo state is per-TUI session
+	// Get priorities from database via planner (with config fallback)
+	priorities := s.planner.GetPriorities()
+
 	response := PrioritiesResponse{
-		OKRs:            s.config.Priorities.OKRs,
-		FocusAreas:      s.config.Priorities.FocusAreas,
-		KeyProjects:     s.config.Priorities.KeyProjects,
-		KeyStakeholders: s.config.Priorities.KeyStakeholders,
-		UndoAvailable:   false,
+		OKRs:            priorities.OKRs,
+		FocusAreas:      priorities.FocusAreas,
+		KeyProjects:     priorities.KeyProjects,
+		KeyStakeholders: priorities.KeyStakeholders,
+		UndoAvailable:   false, // Undo state is per-TUI session
 	}
 
 	writeJSON(w, http.StatusOK, response)
@@ -210,14 +214,23 @@ func (s *Server) updatePriorities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update config in memory
-	s.config.Priorities.OKRs = req.OKRs
-	s.config.Priorities.FocusAreas = req.FocusAreas
-	s.config.Priorities.KeyProjects = req.KeyProjects
-	s.config.Priorities.KeyStakeholders = req.KeyStakeholders
+	// Create config.Priorities struct from request
+	priorities := &config.Priorities{
+		OKRs:            req.OKRs,
+		FocusAreas:      req.FocusAreas,
+		KeyProjects:     req.KeyProjects,
+		KeyStakeholders: req.KeyStakeholders,
+	}
 
-	// Save to file - reuse the same logic from TUI
-	// We'll need to pass the config path through
+	// Save to database
+	if err := s.database.UpdatePriorities(priorities); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to update priorities: %v", err))
+		return
+	}
+
+	// Also update config in memory for immediate use
+	s.config.Priorities = *priorities
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 

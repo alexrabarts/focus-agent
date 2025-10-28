@@ -219,6 +219,8 @@ func (m Model) refreshCurrentView() tea.Cmd {
 	switch m.currentView {
 	case tasksView:
 		return m.tasksModel.fetchTasks()
+	case prioritiesView:
+		return m.prioritiesModel.fetchPriorities()
 	case queueView:
 		return m.queueModel.fetchQueue()
 	case statsView:

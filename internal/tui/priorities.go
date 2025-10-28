@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/alexrabarts/focus-agent/internal/config"
 	"github.com/alexrabarts/focus-agent/internal/planner"
-	"gopkg.in/yaml.v3"
 )
 
 type prioritySection int
@@ -32,6 +31,11 @@ const (
 	editingMode
 	reorderingMode
 )
+
+type prioritiesLoadedMsg struct {
+	priorities *config.Priorities
+	err        error
+}
 
 type PrioritiesModel struct {
 	config             *config.Config
@@ -54,7 +58,7 @@ func NewPrioritiesModel(cfg *config.Config, plannerService *planner.Planner, api
 	ti.Placeholder = "Enter new priority..."
 	ti.CharLimit = 200
 
-	return PrioritiesModel{
+	m := PrioritiesModel{
 		config:             cfg,
 		configPath:         os.ExpandEnv("$HOME/.focus-agent/config.yaml"),
 		apiClient:          apiClient,
@@ -65,6 +69,44 @@ func NewPrioritiesModel(cfg *config.Config, plannerService *planner.Planner, api
 		textInput:          ti,
 		previousPriorities: nil,
 		viewport:           viewport.New(80, 20),
+	}
+
+	// Load priorities from database (if available)
+	m.loadPriorities()
+
+	return m
+}
+
+// loadPriorities loads priorities from the database via planner or API
+func (m *PrioritiesModel) loadPriorities() {
+	if m.apiClient != nil {
+		// Remote mode: fetch from API
+		priorities, err := m.apiClient.GetPriorities()
+		if err == nil {
+			m.config.Priorities = *priorities
+		}
+	} else if m.planner != nil {
+		// Local mode: load from database via planner (with config fallback)
+		dbPriorities := m.planner.GetPriorities()
+		m.config.Priorities = *dbPriorities
+	}
+}
+
+// fetchPriorities returns a command to reload priorities from the database/API
+func (m PrioritiesModel) fetchPriorities() tea.Cmd {
+	return func() tea.Msg {
+		var priorities *config.Priorities
+		var err error
+
+		if m.apiClient != nil {
+			// Remote mode: fetch from API
+			priorities, err = m.apiClient.GetPriorities()
+		} else if m.planner != nil {
+			// Local mode: load from database via planner (with config fallback)
+			priorities = m.planner.GetPriorities()
+		}
+
+		return prioritiesLoadedMsg{priorities: priorities, err: err}
 	}
 }
 
@@ -83,6 +125,15 @@ func (m PrioritiesModel) Update(msg tea.Msg) (PrioritiesModel, tea.Cmd) {
 	var cmd tea.Cmd
 	var vpCmd tea.Cmd
 	m.viewport, vpCmd = m.viewport.Update(msg)
+
+	// Handle priorities loaded message
+	switch msg := msg.(type) {
+	case prioritiesLoadedMsg:
+		if msg.err == nil && msg.priorities != nil {
+			m.config.Priorities = *msg.priorities
+		}
+		return m, nil
+	}
 
 	// Handle adding mode
 	if m.mode == addingMode {
@@ -497,36 +548,11 @@ func (m PrioritiesModel) saveConfig() error {
 		return m.apiClient.UpdatePriorities(&m.config.Priorities)
 	}
 
-	// Local mode: write to config file
-	// Read the current config file
-	data, err := os.ReadFile(m.configPath)
-	if err != nil {
-		return fmt.Errorf("failed to read config: %w", err)
-	}
-
-	// Parse into generic map to preserve structure
-	var configMap map[string]interface{}
-	if err := yaml.Unmarshal(data, &configMap); err != nil {
-		return fmt.Errorf("failed to parse config: %w", err)
-	}
-
-	// Update priorities section
-	priorities := make(map[string]interface{})
-	priorities["okrs"] = m.config.Priorities.OKRs
-	priorities["focus_areas"] = m.config.Priorities.FocusAreas
-	priorities["key_projects"] = m.config.Priorities.KeyProjects
-	priorities["key_stakeholders"] = m.config.Priorities.KeyStakeholders
-	configMap["priorities"] = priorities
-
-	// Marshal back to YAML
-	newData, err := yaml.Marshal(configMap)
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
-	}
-
-	// Write back to file
-	if err := os.WriteFile(m.configPath, newData, 0644); err != nil {
-		return fmt.Errorf("failed to write config: %w", err)
+	// Local mode: save to database via planner
+	if m.planner != nil {
+		if err := m.planner.SavePriorities(&m.config.Priorities); err != nil {
+			return fmt.Errorf("failed to save priorities to database: %w", err)
+		}
 	}
 
 	// Trigger rescore of tasks with new priorities asynchronously
