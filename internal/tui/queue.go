@@ -83,7 +83,7 @@ func (m QueueModel) fetchQueue() tea.Cmd {
 				WHERE t.summary IS NULL OR t.summary = ''
 				GROUP BY t.id
 				ORDER BY MAX(m.ts) DESC
-				LIMIT 100
+				LIMIT 500
 			`
 
 			rows, queryErr := m.database.Query(query)

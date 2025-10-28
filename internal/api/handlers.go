@@ -301,7 +301,7 @@ func (s *Server) handleThreads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	threads, err := s.database.GetThreadsWithSummaries(50)
+	threads, err := s.database.GetThreadsWithSummaries(500)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -392,7 +392,7 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 		WHERE t.summary IS NULL OR t.summary = ''
 		GROUP BY t.id
 		ORDER BY MAX(m.ts) DESC
-		LIMIT 100
+		LIMIT 500
 	`
 
 	rows, err := s.database.Query(query)

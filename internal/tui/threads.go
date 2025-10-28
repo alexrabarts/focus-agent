@@ -58,7 +58,7 @@ func (m ThreadsModel) fetchThreads() tea.Cmd {
 			threads, err = m.apiClient.GetThreads()
 		} else {
 			// Use local database
-			threads, err = m.database.GetThreadsWithSummaries(50)
+			threads, err = m.database.GetThreadsWithSummaries(500)
 		}
 
 		return threadsLoadedMsg{threads: threads, err: err}
