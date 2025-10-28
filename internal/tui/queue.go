@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss/v2"
+	"github.com/alexrabarts/focus-agent/internal/config"
 	"github.com/alexrabarts/focus-agent/internal/db"
 	"github.com/alexrabarts/focus-agent/internal/scheduler"
 )
@@ -16,6 +17,7 @@ type QueueModel struct {
 	database     *db.DB
 	apiClient    *APIClient
 	scheduler    *scheduler.Scheduler // For local mode processing
+	config       *config.Config        // Config for checking AI processing status
 	queueItems   []QueueItem
 	cursor       int
 	offset       int // For scrolling
@@ -49,11 +51,12 @@ type tickProcessMsg struct{}
 
 type processingTimeoutMsg struct{}
 
-func NewQueueModel(database *db.DB, apiClient *APIClient, sched *scheduler.Scheduler) QueueModel {
+func NewQueueModel(database *db.DB, apiClient *APIClient, sched *scheduler.Scheduler, cfg *config.Config) QueueModel {
 	return QueueModel{
 		database:  database,
 		apiClient: apiClient,
 		scheduler: sched,
+		config:    cfg,
 		loading:   true,
 		viewport:  viewport.New(80, 20),
 	}
@@ -256,6 +259,23 @@ func (m QueueModel) View() string {
 	}
 
 	var b strings.Builder
+
+	// Show warning banner if AI processing is disabled
+	if m.config != nil && !m.config.Limits.EnableAIProcessing {
+		warningStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("202")).
+			Background(lipgloss.Color("52")).
+			Bold(true).
+			Padding(0, 1).
+			Width(80)
+		b.WriteString(warningStyle.Render("⚠  AI PROCESSING PAUSED - Queue will not be processed automatically"))
+		b.WriteString("\n")
+		hintStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Padding(0, 1)
+		b.WriteString(hintStyle.Render("   Set enable_ai_processing: true in config and restart server to resume"))
+		b.WriteString("\n\n")
+	}
 
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).

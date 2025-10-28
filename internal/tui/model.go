@@ -96,7 +96,7 @@ func NewModel(database *db.DB, clients *google.Clients, llmClient llm.Client, pl
 		apiClient:       apiClient,
 		tasksModel:      NewTasksModel(database, plannerService, apiClient),
 		prioritiesModel: NewPrioritiesModel(cfg, plannerService, apiClient),
-		queueModel:      NewQueueModel(database, apiClient, sched),
+		queueModel:      NewQueueModel(database, apiClient, sched, cfg),
 		statsModel:      NewStatsModel(database, apiClient),
 		threadsModel:    NewThreadsModel(database, apiClient),
 		lastRefreshTime: time.Now(),
