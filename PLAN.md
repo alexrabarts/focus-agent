@@ -141,6 +141,27 @@ Enable Focus Agent to operate as a shared Chat app across multiple Google Worksp
 
 ## Ideas / Backlog
 
+### Normalize Task Scores to Percentages
+**Priority:** Low
+**Status:** Planned
+
+Normalize all task scoring fields to display as consistent percentages instead of raw numeric values.
+
+**Problem:** Task calculated scores show values like 1.96 but display as 2.0 in the task list, creating confusion about precision and scale.
+
+**Solution:**
+- Normalize all scoring fields to 0-100% scale
+- Affected fields: calculated score, impact, urgency, strategic alignment, effort, stakeholder
+- Update TUI display formatting
+- Update database queries to return normalized values
+- Ensure consistency across API endpoints
+
+**Benefits:**
+- Clearer understanding of task priority (e.g., 85% vs 1.96)
+- Consistent scale across all metrics
+- More intuitive for users to understand relative priorities
+- Better visual representation in TUI
+
 ### Fix Google Chat Hyperlinks
 **Priority:** Medium
 **Status:** Known Issue
