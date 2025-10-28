@@ -424,6 +424,7 @@ func (c *OllamaClient) parseTasksFromResponse(response string) []*db.Task {
 			Status:  "pending",
 			Impact:  2, // Default medium impact
 			Urgency: 2, // Default medium urgency
+			Effort:  "M", // Default medium effort
 		}
 
 		// Parse pipe-delimited fields
