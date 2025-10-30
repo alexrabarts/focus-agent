@@ -23,12 +23,12 @@ type OllamaInterface interface {
 
 // HybridClient uses Ollama as primary, Claude CLI as secondary, and Gemini as final fallback
 type HybridClient struct {
-	ollama         OllamaInterface // Can be *OllamaClient or *DistributedOllamaClient
+	ollama            OllamaInterface          // Can be *OllamaClient or *DistributedOllamaClient
 	distributedOllama *DistributedOllamaClient // Keep reference for shutdown
-	claudePath     string
-	gemini         *GeminiClient
-	db             *db.DB
-	config         *config.Config
+	claudePath        string
+	gemini            *GeminiClient
+	db                *db.DB
+	config            *config.Config
 }
 
 // NewHybridClient creates a hybrid LLM client with fallback chain: Ollama -> Claude CLI -> Gemini
@@ -132,6 +132,214 @@ func (h *HybridClient) callClaude(ctx context.Context, prompt string) (string, e
 	}
 
 	return strings.TrimSpace(string(output)), nil
+}
+
+// extractTasksWithClaude uses Claude CLI to extract tasks from full message thread
+func (h *HybridClient) extractTasksWithClaude(ctx context.Context, messages []*db.Message, userEmail string) ([]*db.Task, error) {
+	if h.claudePath == "" {
+		return nil, fmt.Errorf("claude CLI not available")
+	}
+
+	// Build task extraction prompt with full message context
+	prompt := h.buildTaskExtractionPromptWithContext(messages, userEmail)
+
+	// Check cache
+	hash := h.gemini.hashPrompt(prompt)
+	cached, err := h.db.GetCachedResponse(hash)
+	if err == nil && cached != nil {
+		log.Printf("Using cached Claude task extraction")
+		return h.parseTasksFromJSON(cached.Response, userEmail)
+	}
+
+	// Call Claude CLI with JSON output
+	cmd := exec.CommandContext(ctx,
+		h.claudePath,
+		"-p",
+		"--model", "haiku",
+		"--dangerously-skip-permissions",
+		"--output-format", "text",
+		prompt,
+	)
+
+	startTime := time.Now()
+	output, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("claude CLI failed: %w (stderr: %s)", err, string(exitErr.Stderr))
+		}
+		return nil, fmt.Errorf("claude CLI execution failed: %w", err)
+	}
+
+	response := strings.TrimSpace(string(output))
+	log.Printf("✓ Claude CLI succeeded for task extraction (%.2fs)", time.Since(startTime).Seconds())
+
+	// Cache the response
+	tokens := h.gemini.estimateTokens(prompt + response)
+	cache := &db.LLMCache{
+		Hash:      hash,
+		Prompt:    prompt,
+		Response:  response,
+		Model:     "claude-haiku",
+		Tokens:    tokens,
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	h.db.SaveCachedResponse(cache)
+	h.db.LogUsage("claude", "extract_tasks", tokens, 0, time.Since(startTime), nil)
+
+	// Parse tasks from JSON response
+	return h.parseTasksFromJSON(response, userEmail)
+}
+
+// buildTaskExtractionPromptWithContext creates an intelligent prompt that considers message flow
+func (h *HybridClient) buildTaskExtractionPromptWithContext(messages []*db.Message, userEmail string) string {
+	displayName := userEmail
+	if displayName == "" {
+		displayName = "the user"
+	}
+
+	var prompt strings.Builder
+
+	prompt.WriteString(fmt.Sprintf(`You are analyzing an email thread to extract action items for %s.
+
+CRITICAL RULES:
+1. ONLY extract tasks that %s needs to do and hasn't already done
+2. Look at the message flow - if %s already completed an action, DON'T create a task
+3. SKIP informational updates that don't require action (e.g., "PC scheduled for Dec 22", "Here's an update")
+4. SKIP requests TO others (e.g., "Can you [someone else] do X")
+5. INCLUDE explicit requests directed at %s (e.g., "Can you review", "Please confirm")
+6. INCLUDE commitments %s made that haven't been fulfilled yet
+7. SKIP invitations or calendar-style events (those are usually on the calendar already)
+
+EXAMPLES OF WHAT TO SKIP:
+- "Your PC is scheduled for December 22nd" → NO TASK (just info)
+- "I've submitted the form" → NO TASK (already done)
+- "Thanks for confirming" → NO TASK (conversation closer)
+- "Can Sarah review this?" → NO TASK (directed at Sarah)
+
+EXAMPLES OF WHAT TO INCLUDE:
+- "Can you review the proposal by Friday?" → YES TASK (explicit request)
+- "I'll send you the report tomorrow" → YES TASK (if user sent this, it's their commitment)
+- "Please confirm once you've reviewed the attachment" → YES TASK (requires action)
+
+EMAIL THREAD:
+`, displayName, displayName, displayName, displayName, displayName, displayName))
+
+	// Add messages in chronological order to show conversation flow
+	for i, msg := range messages {
+		prompt.WriteString(fmt.Sprintf("\n[Message %d]\n", i+1))
+		prompt.WriteString(fmt.Sprintf("From: %s\n", msg.From))
+		prompt.WriteString(fmt.Sprintf("Date: %s\n", msg.Timestamp.Format("Jan 2, 3:04 PM")))
+		prompt.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
+
+		// Use full body if available, otherwise snippet
+		content := msg.Body
+		if content == "" {
+			content = msg.Snippet
+		}
+		prompt.WriteString(fmt.Sprintf("Content:\n%s\n", content))
+	}
+
+	prompt.WriteString(fmt.Sprintf(`
+
+Now extract action items for %s.
+
+Return ONLY valid JSON in this exact format:
+{
+  "tasks": [
+    {
+      "title": "Brief, actionable description",
+      "priority": "High|Medium|Low",
+      "due_date": "YYYY-MM-DD or empty string",
+      "reasoning": "Why this is a task for the user"
+    }
+  ]
+}
+
+If there are NO actionable tasks for %s, return: {"tasks": []}
+
+JSON response:`, displayName, displayName))
+
+	return prompt.String()
+}
+
+// parseTasksFromJSON parses Claude's JSON response into tasks
+func (h *HybridClient) parseTasksFromJSON(response string, userEmail string) ([]*db.Task, error) {
+	// Extract JSON from response (might have markdown code blocks)
+	jsonStr := response
+	if strings.Contains(response, "```json") {
+		start := strings.Index(response, "```json") + 7
+		end := strings.LastIndex(response, "```")
+		if start > 7 && end > start {
+			jsonStr = strings.TrimSpace(response[start:end])
+		}
+	} else if strings.Contains(response, "```") {
+		start := strings.Index(response, "```") + 3
+		end := strings.LastIndex(response, "```")
+		if start > 3 && end > start {
+			jsonStr = strings.TrimSpace(response[start:end])
+		}
+	}
+
+	// Parse JSON
+	var result struct {
+		Tasks []struct {
+			Title     string `json:"title"`
+			Priority  string `json:"priority"`
+			DueDate   string `json:"due_date"`
+			Reasoning string `json:"reasoning"`
+		} `json:"tasks"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON response: %w (response: %s)", err, jsonStr)
+	}
+
+	// Convert to db.Task objects
+	var tasks []*db.Task
+	for _, t := range result.Tasks {
+		if t.Title == "" {
+			continue
+		}
+
+		// Map priority string to urgency/impact scores
+		urgency := 3 // Default medium
+		impact := 3  // Default medium
+		switch strings.ToLower(t.Priority) {
+		case "high":
+			urgency = 4
+			impact = 4
+		case "low":
+			urgency = 2
+			impact = 2
+		}
+
+		task := &db.Task{
+			Title:   t.Title,
+			Urgency: urgency,
+			Impact:  impact,
+			Effort:  "M", // Default effort
+			Status:  "pending",
+			ID:      fmt.Sprintf("ai_%d", time.Now().UnixNano()),
+			Source:  "ai",
+		}
+
+		if userEmail != "" {
+			task.Stakeholder = userEmail
+		} else {
+			task.Stakeholder = "me"
+		}
+
+		// Parse due date if provided
+		if t.DueDate != "" && t.DueDate != "0000-00-00" {
+			if dueTime, err := time.Parse("2006-01-02", t.DueDate); err == nil {
+				task.DueTS = &dueTime
+			}
+		}
+
+		tasks = append(tasks, task)
+	}
+
+	return tasks, nil
 }
 
 // SummarizeThread summarizes an email thread (Claude primary, Gemini fallback)
@@ -255,9 +463,19 @@ func (h *HybridClient) ExtractTasksFromMessages(ctx context.Context, content str
 		log.Printf("Ollama task extraction failed, falling back to Claude: %v", err)
 	}
 
-	// Try Claude CLI second (would need implementation for task parsing)
-	// Skipping Claude for now as it requires custom parser implementation
-	// TODO: Add Claude task extraction with custom parser
+	// Try Claude CLI second (with full message context for better intelligence)
+	if h.claudePath != "" && len(messages) > 0 {
+		tasks, err := h.extractTasksWithClaude(ctx, messages, userEmail)
+		if err == nil {
+			if len(tasks) > 0 {
+				log.Printf("Extracted %d tasks using Claude CLI", len(tasks))
+			} else {
+				log.Printf("Claude CLI processed thread successfully - no tasks found")
+			}
+			return tasks, nil
+		}
+		log.Printf("Claude task extraction failed, falling back to Gemini: %v", err)
+	}
 
 	// Final fallback to Gemini (handles sent email detection and filtering)
 	log.Printf("Using Gemini for task extraction (fallback)")

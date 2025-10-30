@@ -2,7 +2,9 @@ package scheduler
 
 import (
 	"context"
+	"crypto/sha1"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -20,15 +22,15 @@ import (
 
 // Scheduler manages all scheduled jobs
 type Scheduler struct {
-	cron     *cron.Cron
-	db       *db.DB
-	google   *google.Clients
-	llm      llm.Client
-	planner  *planner.Planner
-	config   *config.Config
-	jobs     map[string]cron.EntryID
-	ctx      context.Context
-	cancel   context.CancelFunc
+	cron    *cron.Cron
+	db      *db.DB
+	google  *google.Clients
+	llm     llm.Client
+	planner *planner.Planner
+	config  *config.Config
+	jobs    map[string]cron.EntryID
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 // New creates a new scheduler
@@ -351,7 +353,8 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 		return fmt.Errorf("failed to summarize thread %s: %w", threadID, err)
 	}
 
-	// Extract tasks (pass messages for sent email detection)
+	// Extract tasks (pass full messages for context-aware extraction)
+	// Claude CLI uses full message context to understand conversation flow and avoid false tasks
 	tasks, err := s.llm.ExtractTasksFromMessages(s.ctx, summary, messages)
 	if err != nil {
 		log.Printf("Failed to extract tasks from thread %s: %v", threadID, err)
@@ -374,6 +377,8 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 		task.Source = "gmail"
 		// Set source_id to thread ID so we can link tasks to threads
 		task.SourceID = threadID
+		normalizedTitle := ensureGmailTaskID(task, threadID)
+		purgeDuplicateGmailTasks(s.db, threadID, normalizedTitle, task.ID)
 
 		// Enrich task description with full context from email thread
 		if enrichedDesc, err := s.llm.EnrichTaskDescription(s.ctx, task, messages); err == nil {
@@ -587,6 +592,8 @@ func (s *Scheduler) ProcessNewMessages() {
 			task.Source = "gmail"
 			// Set source_id to thread ID so we can link tasks to threads
 			task.SourceID = threadID
+			normalizedTitle := ensureGmailTaskID(task, threadID)
+			purgeDuplicateGmailTasks(s.db, threadID, normalizedTitle, task.ID)
 
 			// Enrich task description with full context from email thread
 			if enrichedDesc, err := s.llm.EnrichTaskDescription(s.ctx, task, messages); err == nil {
@@ -783,7 +790,7 @@ func (s *Scheduler) EnrichExistingTasks() error {
 		if (i+1)%10 == 0 {
 			elapsed := time.Since(startTime)
 			remaining := len(tasksToEnrich) - (i + 1)
-			estimatedTimeLeft := time.Duration(float64(elapsed)/float64(i+1)*float64(remaining))
+			estimatedTimeLeft := time.Duration(float64(elapsed) / float64(i+1) * float64(remaining))
 			avgTimePerTask := elapsed / time.Duration(i+1)
 			log.Printf("Progress: %d/%d tasks | Elapsed: %v | Avg: %v/task | Est. remaining: %v",
 				i+1, len(tasksToEnrich), elapsed.Round(time.Second), avgTimePerTask.Round(time.Second), estimatedTimeLeft.Round(time.Second))
@@ -903,6 +910,8 @@ func (s *Scheduler) ReprocessAITasks() error {
 			// Set source to gmail for email-extracted tasks
 			task.Source = "gmail"
 			task.SourceID = thread.ID
+			normalizedTitle := ensureGmailTaskID(task, thread.ID)
+			purgeDuplicateGmailTasks(s.db, thread.ID, normalizedTitle, task.ID)
 			if err := s.db.SaveTask(task); err != nil {
 				log.Printf("Failed to save task: %v", err)
 				continue
@@ -1020,4 +1029,54 @@ func (s *Scheduler) CleanupOtherPeoplesTasks() error {
 	log.Println("═══════════════════════════════════════════════════════")
 
 	return nil
+}
+
+func ensureGmailTaskID(task *db.Task, threadID string) string {
+	if task == nil {
+		return ""
+	}
+
+	normalizedTitle := normalizeTaskTitle(task.Title)
+
+	dueKey := ""
+	if task.DueTS != nil {
+		dueKey = task.DueTS.Format("2006-01-02")
+	}
+
+	fingerprint := fmt.Sprintf("%s|%s|%s",
+		threadID,
+		normalizedTitle,
+		dueKey,
+	)
+
+	hash := sha1.Sum([]byte(fingerprint))
+	task.ID = fmt.Sprintf("gmail_%s", hex.EncodeToString(hash[:8]))
+
+	return normalizedTitle
+}
+
+func normalizeTaskTitle(title string) string {
+	if title == "" {
+		return ""
+	}
+	return strings.Join(strings.Fields(strings.ToLower(title)), " ")
+}
+
+func purgeDuplicateGmailTasks(database *db.DB, threadID, normalizedTitle, keepID string) {
+	if normalizedTitle == "" || keepID == "" {
+		return
+	}
+
+	query := `
+		DELETE FROM tasks
+		WHERE source = 'gmail'
+		  AND source_id = ?
+		  AND id != ?
+		  AND status = 'pending'
+		  AND lower(trim(regexp_replace(title, '\\s+', ' ', 'g'))) = ?
+	`
+
+	if _, err := database.Exec(query, threadID, keepID, normalizedTitle); err != nil {
+		log.Printf("Failed to purge duplicate tasks for thread %s: %v", threadID, err)
+	}
 }
