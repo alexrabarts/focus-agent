@@ -93,6 +93,8 @@ For each task, provide:
 
 IMPORTANT FILTERING:
 - SKIP meeting invitation tasks (e.g., "Respond to meeting invitation", "Accept meeting", "Confirm availability") - these belong in calendar, not task list
+- SKIP declined meeting invites UNLESS there's an explicit request to reschedule (e.g., "Can we find another time?" or "Please suggest alternatives") - simply declining is not a task
+- SKIP tasks where YOU are organizing events FOR OTHERS (e.g., "Arrange venue for lunch event", "Send invitations to employees", "Book catering for team") - these are event planning tasks for someone else's benefit
 - SKIP purely informational emails where no action is required (e.g., "FYI", "for your information", "just an update", "wanted to share", "keeping you in the loop", "no action needed")
 - SKIP emails where you're being informed about something but have no action to take
 - SKIP tasks that are requests TO others where you're waiting for them to deliver/provide something (e.g., "Alex is requesting materials from Jules", "asking John to prepare report") - these are tasks for THEM, not you
