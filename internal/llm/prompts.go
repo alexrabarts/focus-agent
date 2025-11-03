@@ -91,12 +91,12 @@ IMPORTANT FILTERING:
 Content:
 %s
 
-Format as a numbered list with pipe-delimited fields. Example:
-1. Title: Review Q3 budget variance analysis | Due: Friday EOB | Impact: 5 | Urgency: 5 | Effort: M | Stakeholder: Sarah Chen (VP Finance) | Project: Board Meeting Prep
-2. Title: Read Azure security documentation | Due: Next week | Impact: 1 | Urgency: 2 | Effort: L | Stakeholder: | Project: Security Training
-3. Title: Provide feedback on draft proposal | Due: Tomorrow | Impact: 4 | Urgency: 5 | Effort: M | Stakeholder: John Smith (Director) | Project: Q4 Planning
+Return ONLY tasks found in the content above. Format as a numbered list with pipe-delimited fields.
 
-Tasks:`, p.userEmail, content)
+FORMAT EXAMPLE (do NOT extract these - they are just examples of the format):
+1. Title: [Task description] | Due: [Deadline] | Impact: [1-5] | Urgency: [1-5] | Effort: [S/M/L] | Stakeholder: [Name or empty] | Project: [Context]
+
+YOUR EXTRACTED TASKS FROM THE CONTENT:`, p.userEmail, content)
 }
 
 // BuildSentEmailTaskExtraction creates a prompt for extracting self-commitments from sent emails
