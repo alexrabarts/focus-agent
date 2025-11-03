@@ -86,6 +86,7 @@ IMPORTANT FILTERING:
 - SKIP purely informational emails where no action is required (e.g., "FYI", "for your information", "just an update", "wanted to share", "keeping you in the loop", "no action needed")
 - SKIP emails where you're being informed about something but have no action to take
 - SKIP tasks that are requests TO others where you're waiting for them to deliver/provide something (e.g., "Alex is requesting materials from Jules", "asking John to prepare report") - these are tasks for THEM, not you
+- SKIP marketing/promotional emails (e.g., product announcements, sales pitches, "explore our solution", newsletters, webinar invites, "learn more about", "discover how") - these are not actionable work tasks
 
 Content:
 %s
