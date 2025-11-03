@@ -275,6 +275,13 @@ func (g *GmailClient) syncMessage(ctx context.Context, database *db.DB, messageI
 
 // processMessage extracts and stores message data
 func (g *GmailClient) processMessage(ctx context.Context, database *db.DB, msg *gmail.Message, threadID string) error {
+	// Skip spam and trash messages
+	for _, label := range msg.LabelIds {
+		if label == "SPAM" || label == "TRASH" {
+			return nil // Skip without error
+		}
+	}
+
 	// Extract headers
 	headers := make(map[string]string)
 	for _, header := range msg.Payload.Headers {
