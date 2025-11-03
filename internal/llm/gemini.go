@@ -841,6 +841,32 @@ func isMeetingInvitationGemini(title string) bool {
 	return false
 }
 
+// isValidStakeholder checks if a stakeholder field contains a person's name
+// Returns false for: team names, departments, companies, generic roles
+func isValidStakeholder(stakeholder string) bool {
+	if stakeholder == "" || stakeholder == "N/A" {
+		return true // Empty/N/A is valid
+	}
+
+	stakeholderLower := strings.ToLower(stakeholder)
+
+	// Invalid patterns: teams, departments, generic roles, companies
+	invalidPatterns := []string{
+		"team", "department", "support", "marketing", "finance",
+		"operations", "group", "division", "sales", "customer",
+		"engineering", "product", "design", "hr", "legal",
+		"accounting", "admin", "relevant", "member", "staff",
+	}
+
+	for _, pattern := range invalidPatterns {
+		if strings.Contains(stakeholderLower, pattern) {
+			return false
+		}
+	}
+
+	return true
+}
+
 func (g *GeminiClient) parseTasksFromResponse(response string) []*db.Task {
 	var tasks []*db.Task
 	seenTitles := make(map[string]bool) // Track duplicate titles
@@ -955,7 +981,12 @@ func (g *GeminiClient) parseTaskField(task *db.Task, field string) {
 	} else if strings.HasPrefix(field, "Stakeholder:") || strings.HasPrefix(fieldLower, "stakeholder:") {
 		stakeholderStr := strings.TrimSpace(strings.TrimPrefix(field, "Stakeholder:"))
 		stakeholderStr = strings.TrimSpace(strings.TrimPrefix(stakeholderStr, "stakeholder:"))
-		task.Stakeholder = stakeholderStr
+		// Validate stakeholder is a person's name, not a team/department/company
+		if isValidStakeholder(stakeholderStr) {
+			task.Stakeholder = stakeholderStr
+		} else {
+			task.Stakeholder = "" // Clear invalid stakeholders
+		}
 	} else if strings.HasPrefix(field, "Project:") || strings.HasPrefix(fieldLower, "project:") {
 		projectStr := strings.TrimSpace(strings.TrimPrefix(field, "Project:"))
 		projectStr = strings.TrimSpace(strings.TrimPrefix(projectStr, "project:"))

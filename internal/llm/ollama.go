@@ -368,7 +368,12 @@ func (c *OllamaClient) parseTasksFromResponse(response string) []*db.Task {
 			} else if strings.HasPrefix(partLower, "stakeholder:") {
 				stakeholderStr := strings.TrimSpace(strings.TrimPrefix(part, "Stakeholder:"))
 				stakeholderStr = strings.TrimSpace(strings.TrimPrefix(stakeholderStr, "stakeholder:"))
-				task.Stakeholder = stakeholderStr
+				// Validate stakeholder is a person's name, not a team/department/company
+				if isValidStakeholder(stakeholderStr) {
+					task.Stakeholder = stakeholderStr
+				} else {
+					task.Stakeholder = "" // Clear invalid stakeholders
+				}
 			} else if strings.HasPrefix(partLower, "project:") {
 				projectStr := strings.TrimSpace(strings.TrimPrefix(part, "Project:"))
 				projectStr = strings.TrimSpace(strings.TrimPrefix(projectStr, "project:"))

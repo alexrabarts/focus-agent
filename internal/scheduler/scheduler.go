@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -22,15 +23,16 @@ import (
 
 // Scheduler manages all scheduled jobs
 type Scheduler struct {
-	cron    *cron.Cron
-	db      *db.DB
-	google  *google.Clients
-	llm     llm.Client
-	planner *planner.Planner
-	config  *config.Config
-	jobs    map[string]cron.EntryID
-	ctx     context.Context
-	cancel  context.CancelFunc
+	cron              *cron.Cron
+	db                *db.DB
+	google            *google.Clients
+	llm               llm.Client
+	planner           *planner.Planner
+	config            *config.Config
+	jobs              map[string]cron.EntryID
+	ctx               context.Context
+	cancel            context.CancelFunc
+	processingMutex   sync.Mutex // Prevents concurrent AI processing runs
 }
 
 // New creates a new scheduler
@@ -372,25 +374,33 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 	}
 
 	// Enrich and save extracted tasks
-	for _, task := range tasks {
+	for taskIndex, task := range tasks {
 		// Set source to gmail for email-extracted tasks
 		task.Source = "gmail"
 		// Set source_id to thread ID so we can link tasks to threads
 		task.SourceID = threadID
-		normalizedTitle := ensureGmailTaskID(task, threadID)
+		normalizedTitle := ensureGmailTaskID(task, threadID, taskIndex)
 		purgeDuplicateGmailTasks(s.db, threadID, normalizedTitle, task.ID)
 
+		// Save task immediately after generating ID to claim ownership and prevent race conditions
+		// This fixes duplicate key violations in concurrent processing scenarios
+		if err := s.db.SaveTask(task); err != nil {
+			log.Printf("Failed to save extracted task: %v", err)
+			continue
+		}
+
 		// Enrich task description with full context from email thread
+		// This happens AFTER saving to avoid race conditions during slow LLM calls
 		if enrichedDesc, err := s.llm.EnrichTaskDescription(s.ctx, task, messages); err == nil {
 			task.Description = enrichedDesc
 			log.Printf("Enriched task description: %s -> %s", task.Title, enrichedDesc[:min(100, len(enrichedDesc))])
+			// Update the task with enriched description
+			if err := s.db.SaveTask(task); err != nil {
+				log.Printf("Failed to update task with enriched description: %v", err)
+			}
 		} else {
 			log.Printf("Failed to enrich task description: %v", err)
-			// Continue with original task if enrichment fails
-		}
-
-		if err := s.db.SaveTask(task); err != nil {
-			log.Printf("Failed to save extracted task: %v", err)
+			// Continue with original task that was already saved
 		}
 	}
 
@@ -443,13 +453,18 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 
 // ProcessNewMessages processes new messages for summaries and task extraction
 func (s *Scheduler) ProcessNewMessages() {
+	// Prevent concurrent processing runs to avoid duplicate task insertions
+	// If another run is in progress, this will block until it completes
+	s.processingMutex.Lock()
+	defer s.processingMutex.Unlock()
+
 	// Check if AI processing is enabled
 	if !s.config.Limits.EnableAIProcessing {
 		log.Println("AI processing is disabled in config - skipping")
 		return
 	}
 
-	log.Println("Processing new messages with AI...")
+	log.Println("🔒 Processing new messages with AI (lock acquired)...")
 
 	// Get threads that need summarization
 	maxProcessing := s.config.Limits.MaxAIProcessingPerRun
@@ -587,25 +602,31 @@ func (s *Scheduler) ProcessNewMessages() {
 		}
 
 		// Enrich and save extracted tasks
-		for _, task := range tasks {
+		for taskIndex, task := range tasks {
 			// Set source to gmail for email-extracted tasks
 			task.Source = "gmail"
 			// Set source_id to thread ID so we can link tasks to threads
 			task.SourceID = threadID
-			normalizedTitle := ensureGmailTaskID(task, threadID)
+			normalizedTitle := ensureGmailTaskID(task, threadID, taskIndex)
 			purgeDuplicateGmailTasks(s.db, threadID, normalizedTitle, task.ID)
 
-			// Enrich task description with full context from email thread
-			if enrichedDesc, err := s.llm.EnrichTaskDescription(s.ctx, task, messages); err == nil {
-				task.Description = enrichedDesc
-			} else {
-				log.Printf("Failed to enrich task description: %v", err)
-				// Continue with original task if enrichment fails
-			}
-
+			// Save task immediately after generating ID to claim ownership and prevent race conditions
 			if err := s.db.SaveTask(task); err != nil {
 				log.Printf("Failed to save extracted task: %v", err)
 				continue
+			}
+
+			// Enrich task description with full context from email thread
+			// This happens AFTER saving to avoid race conditions during slow LLM calls
+			if enrichedDesc, err := s.llm.EnrichTaskDescription(s.ctx, task, messages); err == nil {
+				task.Description = enrichedDesc
+				// Update the task with enriched description
+				if err := s.db.SaveTask(task); err != nil {
+					log.Printf("Failed to update task with enriched description: %v", err)
+				}
+			} else {
+				log.Printf("Failed to enrich task description: %v", err)
+				// Continue with original task that was already saved
 			}
 
 			// Score task immediately after extraction (parallel scoring)
@@ -917,11 +938,11 @@ func (s *Scheduler) ReprocessAITasks() error {
 		}
 
 		// Save extracted tasks
-		for _, task := range tasks {
+		for taskIndex, task := range tasks {
 			// Set source to gmail for email-extracted tasks
 			task.Source = "gmail"
 			task.SourceID = thread.ID
-			normalizedTitle := ensureGmailTaskID(task, thread.ID)
+			normalizedTitle := ensureGmailTaskID(task, thread.ID, taskIndex)
 			purgeDuplicateGmailTasks(s.db, thread.ID, normalizedTitle, task.ID)
 			if err := s.db.SaveTask(task); err != nil {
 				log.Printf("Failed to save task: %v", err)
@@ -1042,7 +1063,7 @@ func (s *Scheduler) CleanupOtherPeoplesTasks() error {
 	return nil
 }
 
-func ensureGmailTaskID(task *db.Task, threadID string) string {
+func ensureGmailTaskID(task *db.Task, threadID string, taskIndex int) string {
 	if task == nil {
 		return ""
 	}
@@ -1054,10 +1075,12 @@ func ensureGmailTaskID(task *db.Task, threadID string) string {
 		dueKey = task.DueTS.Format("2006-01-02")
 	}
 
-	fingerprint := fmt.Sprintf("%s|%s|%s",
+	// Include taskIndex to ensure uniqueness even for tasks with identical titles/due dates
+	fingerprint := fmt.Sprintf("%s|%s|%s|%d",
 		threadID,
 		normalizedTitle,
 		dueKey,
+		taskIndex,
 	)
 
 	hash := sha1.Sum([]byte(fingerprint))

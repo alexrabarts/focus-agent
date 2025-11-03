@@ -153,7 +153,7 @@ func (h *HybridClient) extractTasksWithClaude(ctx context.Context, messages []*d
 	cached, err := h.db.GetCachedResponse(hash)
 	if err == nil && cached != nil {
 		log.Printf("Using cached Claude task extraction")
-		return h.parseTasksFromJSON(cached.Response, userEmail)
+		return h.gemini.parseTasksFromResponse(cached.Response), nil
 	}
 
 	// Call Claude CLI with JSON output
@@ -191,8 +191,8 @@ func (h *HybridClient) extractTasksWithClaude(ctx context.Context, messages []*d
 	h.db.SaveCachedResponse(cache)
 	h.db.LogUsage("claude", "extract_tasks", tokens, 0, time.Since(startTime), nil)
 
-	// Parse tasks from JSON response
-	return h.parseTasksFromJSON(response, userEmail)
+	// Parse tasks from pipe-delimited response (same format as Gemini/Ollama)
+	return h.gemini.parseTasksFromResponse(response), nil
 }
 
 // parseTasksFromJSON parses Claude's JSON response into tasks

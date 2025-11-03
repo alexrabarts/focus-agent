@@ -62,23 +62,33 @@ IMPORTANT RULES:
 For each task, provide:
 - title: Brief, actionable description (20-60 characters)
 - due_date: Deadline if mentioned (e.g., "tomorrow", "Friday", "Oct 30", "by EOD")
-- impact: Business impact score (1-5):
-  * 1 = Nice to have, minimal consequence if delayed (learning/familiarization, general research, reading documentation, administrative overhead)
-  * 2 = Helpful but not urgent (minor improvements, nice-to-have features)
-  * 3 = Important, affects day-to-day operations (routine work, team coordination)
-  * 4 = High impact, affects key stakeholders or projects (deliverables, client work)
-  * 5 = Critical, blocks others or has major business impact (production issues, urgent deadlines)
-- urgency: Time sensitivity score (1-5):
-  * 1 = No specific deadline, can wait weeks
-  * 2 = Deadline in 2-4 weeks
-  * 3 = Deadline within 1 week
-  * 4 = Deadline in next 3 days
-  * 5 = Overdue or due today/tomorrow
+- impact: Business impact score (1-5) - USE THE FULL RANGE, not everything is 3-4:
+  * 1 = Nice to have, minimal consequence if delayed
+    Examples: Review blog post draft, update internal wiki, familiarize with new tool
+  * 2 = Minor impact, can wait
+    Examples: Respond to low-priority question, update personal profile, organize files
+  * 3 = Moderate impact, affects team operations
+    Examples: Coordinate team meeting, review routine report, respond to colleague request
+  * 4 = Significant impact, affects business unit or clients
+    Examples: Resolve payment issue, prepare for client meeting, fix broken integration
+  * 5 = Critical impact, affects entire company or urgent escalation
+    Examples: Fix production outage, handle major client escalation, address security vulnerability
+- urgency: Time sensitivity score (1-5) - USE THE FULL RANGE based on actual deadlines:
+  * 1 = No deadline, background task
+    Examples: "When you get a chance", "No rush", long-term planning
+  * 2 = Can wait weeks (deadline 2-4 weeks away)
+    Examples: "By end of month", "Before Q1", future planning
+  * 3 = Needed within days (deadline this week or next)
+    Examples: "By Friday", "This week", "Next Tuesday"
+  * 4 = Needed very soon (deadline tomorrow or next day)
+    Examples: "By tomorrow", "ASAP", "By EOD Wednesday"
+  * 5 = Immediate action required (today, overdue, or blocking others)
+    Examples: "Today", "Urgent", "Blocking deployment", overdue items
 - effort: Estimated effort (S/M/L):
   * S = < 1 hour, single action (reply, calendar action, quick decision)
   * M = 1-4 hours, moderate complexity (document review, meeting prep, analysis)
   * L = > 4 hours OR sustained learning (training, reading documentation, multi-session work, technical deep-dives)
-- stakeholder: ONLY populate if a specific person with name/title is mentioned (e.g., "Sarah Chen", "VP Finance"). Leave empty for generic terms like "Team", "Users", "N/A"
+- stakeholder: ONLY use a person's actual name (e.g., "Sarah Chen", "Tim Davis"). DO NOT use: team names, department names (Finance, Marketing), company names (Acme Corp), generic roles (Customer Support), or phrases like "Relevant team member". If no specific person's name is mentioned, leave empty.
 - project: Related project, initiative, or context (if mentioned)
 
 IMPORTANT FILTERING:
@@ -88,13 +98,24 @@ IMPORTANT FILTERING:
 - SKIP tasks that are requests TO others where you're waiting for them to deliver/provide something (e.g., "Alex is requesting materials from Jules", "asking John to prepare report") - these are tasks for THEM, not you
 - SKIP tasks where YOU are the recipient/beneficiary, not the actor (e.g., "Prepare space for Alex", "Send report to you", "Book room for Alex") - these describe someone ELSE's task. Look for patterns: "[verb] for Alex", "[verb] for you", "[verb] to you"
 - SKIP marketing/promotional emails (e.g., product announcements, sales pitches, "explore our solution", newsletters, webinar invites, "learn more about", "discover how") - these are not actionable work tasks
+- SKIP social invitations and team celebration announcements (e.g., "Join us celebrating John's birthday", "Happy hour on Friday", "Team lunch", "Contribute to birthday board", "Sign the card for Maria") - these are optional social events, not work tasks
+- SKIP decorative or aesthetic announcements (e.g., "Check out the new office decorations", "Enjoy the Halloween display", "See the new artwork in lobby") - no business action required
+- SKIP "nice to have" optional activities with no business impact (e.g., "Feel free to stop by", "You're welcome to attend", "Optional: join us for") - these lack clear deliverable or deadline
+- SKIP purely congratulatory or thank-you messages (e.g., "Thanks for your hard work", "Congratulations on the launch", "Great job team") - appreciation with no follow-up action
+
+Examples of NON-tasks to SKIP:
+- "Enjoy the new office decorations in Building 2"
+- "Join us in celebrating Sarah's promotion this Friday"
+- "Check out the Halloween decorations in the lobby"
+- "Thanks for your contributions to the Q3 launch"
+- "Contribute to Mark's birthday Kudoboard"
+- "You're invited to the optional coffee chat"
 
 Content:
 %s
 
 Return ONLY tasks found in the content above. Format as a numbered list with pipe-delimited fields.
-
-FORMAT EXAMPLE (do NOT extract these - they are just examples of the format):
+Each line should follow this exact format:
 1. Title: [Task description] | Due: [Deadline] | Impact: [1-5] | Urgency: [1-5] | Effort: [S/M/L] | Stakeholder: [Name or empty] | Project: [Context]
 
 YOUR EXTRACTED TASKS FROM THE CONTENT:`, p.userEmail, content)
@@ -401,23 +422,20 @@ func (p *PromptBuilder) BuildTaskExtractionWithConversationFlow(messages []*db.M
 	prompt.WriteString("- Consider conversation flow - later messages may cancel or modify earlier requests\n")
 	prompt.WriteString("- Skip tasks that were already completed in the thread\n")
 	prompt.WriteString("- Skip vague or unclear items\n")
-	prompt.WriteString("- Include context about who requested it and why\n\n")
+	prompt.WriteString("- Skip meeting invitations (calendar items)\n")
+	prompt.WriteString("- Skip purely informational emails with no action required\n\n")
 
-	prompt.WriteString("OUTPUT FORMAT:\n")
-	prompt.WriteString("For each task, provide:\n")
-	prompt.WriteString("1. Title: Brief, actionable description\n")
-	prompt.WriteString("2. Context: Who requested it and why (1 sentence)\n")
-	prompt.WriteString("3. Deadline: If mentioned, extract as 'YYYY-MM-DD' or relative ('this week')\n")
-	prompt.WriteString("4. Priority: High/Medium/Low based on urgency and importance\n\n")
+	prompt.WriteString("OUTPUT FORMAT (pipe-delimited):\n")
+	prompt.WriteString("For each task, provide a single line with pipe-separated fields:\n")
+	prompt.WriteString("1. Title: Brief, actionable description (20-60 characters) | Due: [Deadline] | Impact: [1-5] | Urgency: [1-5] | Effort: [S/M/L] | Stakeholder: [Person name or empty] | Project: [Context]\n\n")
+	prompt.WriteString("Impact scale (1-5): 1=minimal, 2=minor, 3=moderate, 4=significant, 5=critical\n")
+	prompt.WriteString("Urgency scale (1-5): 1=no deadline, 2=weeks away, 3=this week, 4=tomorrow, 5=today/overdue\n")
+	prompt.WriteString("Effort: S=<1 hour, M=1-4 hours, L=>4 hours\n\n")
 
-	prompt.WriteString("Example:\n")
-	prompt.WriteString("Task 1:\n")
-	prompt.WriteString("Title: Review Q4 forecast model\n")
-	prompt.WriteString("Context: Sarah (CFO) needs this for board presentation\n")
-	prompt.WriteString("Deadline: Friday EOD\n")
-	prompt.WriteString("Priority: High\n\n")
+	prompt.WriteString("Example output:\n")
+	prompt.WriteString("1. Title: Review Q4 forecast model | Due: Friday EOD | Impact: 4 | Urgency: 4 | Effort: M | Stakeholder: Sarah Chen | Project: Board presentation\n\n")
 
-	prompt.WriteString("Extract tasks now:")
+	prompt.WriteString("Extract tasks now (one per line, pipe-delimited):")
 
 	return prompt.String()
 }
