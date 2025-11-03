@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,7 @@ type GeminiClient struct {
 	proModel        *genai.GenerativeModel
 	db              *db.DB
 	config          *config.Config
+	prompts         *PromptBuilder
 	rateLimiter     *rate.Limiter
 	proRateLimiter  *rate.Limiter
 	cacheTTL        time.Duration
@@ -53,7 +55,7 @@ type ThreadMetadata struct {
 }
 
 // NewGeminiClient creates a new Gemini client
-func NewGeminiClient(apiKey string, database *db.DB, cfg *config.Config) (*GeminiClient, error) {
+func NewGeminiClient(apiKey string, database *db.DB, cfg *config.Config, prompts *PromptBuilder) (*GeminiClient, error) {
 	ctx := context.Background()
 
 	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
@@ -127,6 +129,7 @@ func NewGeminiClient(apiKey string, database *db.DB, cfg *config.Config) (*Gemin
 		proModel:       proModel,
 		db:             database,
 		config:         cfg,
+		prompts:        prompts,
 		rateLimiter:    limiter,
 		proRateLimiter: proLimiter,
 		cacheTTL:       cacheTTL,
@@ -250,7 +253,7 @@ func (g *GeminiClient) generateWithRetryForModel(ctx context.Context, prompt gen
 // SummarizeThread summarizes an email thread
 func (g *GeminiClient) SummarizeThread(ctx context.Context, messages []*db.Message) (string, error) {
 	// Build prompt
-	prompt := g.buildThreadSummaryPrompt(messages)
+	prompt := g.prompts.BuildThreadSummary(messages)
 
 	// Check cache
 	hash := g.hashPrompt(prompt)
@@ -356,7 +359,7 @@ func (g *GeminiClient) SummarizeThreadWithModelSelection(ctx context.Context, me
 	}
 
 	// Build prompt
-	prompt := g.buildThreadSummaryPrompt(messages)
+	prompt := g.prompts.BuildThreadSummary(messages)
 
 	// Check cache
 	hash := g.hashPrompt(prompt + selectedModel)
@@ -433,9 +436,9 @@ func (g *GeminiClient) ExtractTasksFromMessages(ctx context.Context, content str
 	// Choose appropriate prompt based on email direction
 	var prompt string
 	if isSentEmail {
-		prompt = g.buildSentEmailTaskPrompt(content, recipients)
+		prompt = g.prompts.BuildSentEmailTaskExtraction(content, recipients)
 	} else {
-		prompt = g.buildTaskExtractionPrompt(content)
+		prompt = g.prompts.BuildTaskExtraction(content)
 	}
 
 	// Check cache
@@ -493,7 +496,7 @@ type StrategicAlignmentResult struct {
 
 // EvaluateStrategicAlignment uses LLM to determine which strategic priorities align with a task
 func (g *GeminiClient) EvaluateStrategicAlignment(ctx context.Context, task *db.Task, priorities *config.Priorities) (*StrategicAlignmentResult, error) {
-	prompt := g.buildStrategicAlignmentPrompt(task, priorities)
+	prompt := g.prompts.BuildStrategicAlignment(task, priorities)
 
 	// Check cache
 	hash := g.hashPrompt(prompt)
@@ -605,7 +608,7 @@ func (g *GeminiClient) filterTasksForUser(tasks []*db.Task) []*db.Task {
 
 // DraftReply drafts a reply to an email
 func (g *GeminiClient) DraftReply(ctx context.Context, thread []*db.Message, goal string) (string, error) {
-	prompt := g.buildReplyPrompt(thread, goal)
+	prompt := g.prompts.BuildReply(thread, goal)
 
 	// Check cache
 	hash := g.hashPrompt(prompt)
@@ -652,7 +655,7 @@ func (g *GeminiClient) DraftReply(ctx context.Context, thread []*db.Message, goa
 
 // GenerateMeetingPrep generates meeting preparation notes
 func (g *GeminiClient) GenerateMeetingPrep(ctx context.Context, event *db.Event, relatedDocs []*db.Document) (string, error) {
-	prompt := g.buildMeetingPrepPrompt(event, relatedDocs)
+	prompt := g.prompts.BuildMeetingPrep(event, relatedDocs)
 
 	// Check cache
 	hash := g.hashPrompt(prompt)
@@ -699,7 +702,7 @@ func (g *GeminiClient) GenerateMeetingPrep(ctx context.Context, event *db.Event,
 
 // EnrichTaskDescription generates a rich, contextual description for a task based on email thread
 func (g *GeminiClient) EnrichTaskDescription(ctx context.Context, task *db.Task, messages []*db.Message) (string, error) {
-	prompt := g.buildTaskEnrichmentPrompt(task, messages)
+	prompt := g.prompts.BuildTaskEnrichment(task, messages)
 
 	// Check cache
 	hash := g.hashPrompt(prompt)
@@ -742,317 +745,6 @@ func (g *GeminiClient) EnrichTaskDescription(ctx context.Context, task *db.Task,
 	g.db.SaveCachedResponse(cache)
 
 	return enrichedDesc, nil
-}
-
-// buildThreadSummaryPrompt creates a prompt for thread summarization
-func (g *GeminiClient) buildThreadSummaryPrompt(messages []*db.Message) string {
-	var prompt strings.Builder
-
-	prompt.WriteString("Summarize this email thread concisely. Focus on:\n")
-	prompt.WriteString("1. Main topic/issue\n")
-	prompt.WriteString("2. Key decisions or action items\n")
-	prompt.WriteString("3. Who needs to do what\n")
-	prompt.WriteString("4. Deadlines mentioned\n")
-	prompt.WriteString("5. Any risks or blockers\n\n")
-
-	prompt.WriteString("Thread:\n")
-	for _, msg := range messages {
-		prompt.WriteString(fmt.Sprintf("From: %s\n", msg.From))
-		prompt.WriteString(fmt.Sprintf("Date: %s\n", msg.Timestamp.Format("Jan 2, 3:04 PM")))
-		prompt.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
-		prompt.WriteString(fmt.Sprintf("Content: %s\n\n", msg.Snippet))
-	}
-
-	prompt.WriteString("Summary (be concise, max 200 words):")
-
-	return prompt.String()
-}
-
-// buildTaskExtractionPrompt creates a prompt for task extraction
-func (g *GeminiClient) buildTaskExtractionPrompt(content string) string {
-	userEmail := g.config.Google.UserEmail
-	if userEmail == "" {
-		userEmail = "the user"
-	}
-
-	return fmt.Sprintf(`Extract action items from this content that I (%s) need to do or respond to.
-
-IMPORTANT RULES:
-- INCLUDE tasks where I am responsible or need to take action
-- INCLUDE implicit actions directed at me (e.g., "you should review", "recipient needs to", "please confirm")
-- INCLUDE invitations, meeting requests, and events I'm invited to
-- INCLUDE requests for my input, approval, or response
-- INCLUDE deadlines and due dates that affect me
-- INCLUDE tasks with no owner specified (assume they're for me)
-- SKIP only tasks explicitly assigned to other specific people (e.g., "Andrew: do X", "Maria: review Y")
-
-For each task, provide:
-- Title (brief, actionable description)
-- Owner (use "me" for tasks assigned to me)
-- Due date/urgency (if mentioned)
-- Priority (High/Medium/Low based on context and urgency)
-
-Content:
-%s
-
-Format as a numbered list. Example:
-1. Title: Review Q3 budget | Owner: me | Due: Friday | Priority: High
-2. Title: Attend M365 cyber resiliency event | Owner: me | Due: Oct 30 | Priority: Medium
-3. Title: Respond to meeting invitation | Owner: me | Due: This week | Priority: Medium
-
-Tasks:`, userEmail, content)
-}
-
-// buildSentEmailTaskPrompt creates a prompt for extracting self-commitments from sent emails
-func (g *GeminiClient) buildSentEmailTaskPrompt(content string, recipients []string) string {
-	userEmail := g.config.Google.UserEmail
-	if userEmail == "" {
-		userEmail = "the user"
-	}
-
-	recipientList := "others"
-	if len(recipients) > 0 {
-		recipientList = strings.Join(recipients, ", ")
-	}
-
-	return fmt.Sprintf(`Extract commitments and promises I made in this sent email to %s.
-
-IMPORTANT RULES:
-- ONLY extract commitments where I (%s) promised or committed to do something
-- Look for commitment patterns like:
-  * "I will" / "I'll"
-  * "I can" / "I'll make sure"
-  * "Let me" / "I'm going to"
-  * "I promise" / "I commit to"
-  * "I'll send" / "I'll get back to you"
-  * "I'll have it ready"
-- Include delivery promises (e.g., "I'll send the report")
-- Include action promises (e.g., "I'll review this")
-- Include timeline promises (e.g., "I'll get back to you by Friday")
-- SKIP general statements that aren't commitments (e.g., "That sounds good")
-
-For each commitment, provide:
-- Title (brief description of what I committed to)
-- Recipient (from: %s)
-- Due date/urgency (if mentioned, otherwise leave blank)
-- Priority (High/Medium/Low based on context and urgency)
-
-Content:
-%s
-
-Format as a numbered list. Example:
-1. Title: Send Q3 report to Sarah | Recipient: sarah@example.com | Due: Friday EOD | Priority: High
-2. Title: Review proposal for team | Recipient: team@example.com | Due: This week | Priority: Medium
-
-Extract my commitments:`, recipientList, userEmail, recipientList, content)
-}
-
-// buildReplyPrompt creates a prompt for drafting replies
-func (g *GeminiClient) buildReplyPrompt(thread []*db.Message, goal string) string {
-	var prompt strings.Builder
-
-	prompt.WriteString("Draft a concise, professional email reply.\n\n")
-	prompt.WriteString(fmt.Sprintf("Goal: %s\n\n", goal))
-
-	prompt.WriteString("Thread context (most recent first):\n")
-	for i := len(thread) - 1; i >= 0 && i >= len(thread)-3; i-- {
-		msg := thread[i]
-		prompt.WriteString(fmt.Sprintf("From: %s\n", msg.From))
-		prompt.WriteString(fmt.Sprintf("Content: %s\n\n", msg.Snippet))
-	}
-
-	prompt.WriteString("Draft a reply that:\n")
-	prompt.WriteString("- Is concise and to the point\n")
-	prompt.WriteString("- Maintains professional tone\n")
-	prompt.WriteString("- Addresses the goal clearly\n")
-	prompt.WriteString("- Uses my typical writing style (direct, friendly)\n\n")
-
-	prompt.WriteString("Reply (max 150 words):")
-
-	return prompt.String()
-}
-
-// buildMeetingPrepPrompt creates a prompt for meeting preparation
-func (g *GeminiClient) buildMeetingPrepPrompt(event *db.Event, docs []*db.Document) string {
-	var prompt strings.Builder
-
-	prompt.WriteString("Generate a one-page meeting preparation brief.\n\n")
-
-	prompt.WriteString(fmt.Sprintf("Meeting: %s\n", event.Title))
-	prompt.WriteString(fmt.Sprintf("Time: %s\n", event.StartTS.Format("Monday, Jan 2, 3:04 PM")))
-
-	if len(event.Attendees) > 0 {
-		prompt.WriteString(fmt.Sprintf("Attendees: %s\n", strings.Join(event.Attendees, ", ")))
-	}
-
-	if event.Description != "" {
-		prompt.WriteString(fmt.Sprintf("Description: %s\n", event.Description))
-	}
-
-	if len(docs) > 0 {
-		prompt.WriteString("\nRelated documents:\n")
-		for _, doc := range docs {
-			prompt.WriteString(fmt.Sprintf("- %s\n", doc.Title))
-		}
-	}
-
-	prompt.WriteString("\nGenerate a brief with:\n")
-	prompt.WriteString("1. Meeting context and objectives\n")
-	prompt.WriteString("2. Key talking points\n")
-	prompt.WriteString("3. Questions to ask\n")
-	prompt.WriteString("4. Potential decisions needed\n")
-	prompt.WriteString("5. Follow-up actions\n\n")
-
-	prompt.WriteString("Meeting Brief:")
-
-	return prompt.String()
-}
-
-// buildStrategicAlignmentPrompt creates a prompt for strategic alignment evaluation
-func (g *GeminiClient) buildStrategicAlignmentPrompt(task *db.Task, priorities *config.Priorities) string {
-	var prompt strings.Builder
-
-	prompt.WriteString("Evaluate how well this task aligns with the following strategic priorities.\n\n")
-
-	prompt.WriteString("TASK:\n")
-	prompt.WriteString(fmt.Sprintf("Title: %s\n", task.Title))
-	if task.Description != "" {
-		prompt.WriteString(fmt.Sprintf("Description: %s\n", task.Description))
-	}
-	if task.Project != "" {
-		prompt.WriteString(fmt.Sprintf("Project: %s\n", task.Project))
-	}
-	prompt.WriteString("\n")
-
-	prompt.WriteString("STRATEGIC PRIORITIES:\n\n")
-
-	if len(priorities.OKRs) > 0 {
-		prompt.WriteString("OKRs (Objectives & Key Results):\n")
-		for _, okr := range priorities.OKRs {
-			prompt.WriteString(fmt.Sprintf("  - %s\n", okr))
-		}
-		prompt.WriteString("\n")
-	}
-
-	if len(priorities.FocusAreas) > 0 {
-		prompt.WriteString("Focus Areas:\n")
-		for _, area := range priorities.FocusAreas {
-			prompt.WriteString(fmt.Sprintf("  - %s\n", area))
-		}
-		prompt.WriteString("\n")
-	}
-
-	if len(priorities.KeyProjects) > 0 {
-		prompt.WriteString("Key Projects:\n")
-		for _, project := range priorities.KeyProjects {
-			prompt.WriteString(fmt.Sprintf("  - %s\n", project))
-		}
-		prompt.WriteString("\n")
-	}
-
-	prompt.WriteString("INSTRUCTIONS:\n")
-	prompt.WriteString("Evaluate the DIRECT, MEANINGFUL alignment between this task and the strategic priorities.\n\n")
-	prompt.WriteString("STRICT MATCHING RULES:\n")
-	prompt.WriteString("1. Only match if the task DIRECTLY advances or relates to the priority\n")
-	prompt.WriteString("2. Shared keywords alone are NOT sufficient (e.g., 'data team' ≠ 'Data lake project')\n")
-	prompt.WriteString("3. Generic administrative tasks (scheduling, coordinating, reporting) should NOT match strategic priorities unless they're specifically about implementing/advancing that priority\n")
-	prompt.WriteString("4. Be conservative - when in doubt, DON'T match\n\n")
-	prompt.WriteString("EXAMPLES OF POOR MATCHES TO AVOID:\n")
-	prompt.WriteString("- 'Schedule meeting about X' does NOT align with X unless the meeting is to implement/advance X\n")
-	prompt.WriteString("- 'Send report to team' does NOT align with 'Improved forecasting' just because both involve data\n")
-	prompt.WriteString("- 'Coordinate with data team' does NOT align with 'Data lake' unless specifically about the data lake\n")
-	prompt.WriteString("- 'Review budget' does NOT align with 'Profitability' unless it's specifically about improving margins\n\n")
-	prompt.WriteString("EXAMPLES OF GOOD MATCHES:\n")
-	prompt.WriteString("- 'Implement new CRM dashboard' → 'Scalable systems - CRM implementation'\n")
-	prompt.WriteString("- 'Analyze margin trends for cost optimization' → 'Sector Leading Profitability'\n")
-	prompt.WriteString("- 'Design brand guidelines for member experience' → 'Known for distinctive service'\n\n")
-	prompt.WriteString("Return:\n")
-	prompt.WriteString("- score: 0.0 (no alignment) to 5.0 (perfect alignment)\n")
-	prompt.WriteString("- okrs: array of OKR names that genuinely align (empty array if none)\n")
-	prompt.WriteString("- focus_areas: array of Focus Area names that align (empty array if none)\n")
-	prompt.WriteString("- projects: array of Project names that align (empty array if none)\n")
-	prompt.WriteString("- reasoning: brief explanation of your evaluation (include why you excluded matches if any)\n")
-
-	return prompt.String()
-}
-
-// buildTaskEnrichmentPrompt creates a prompt for enriching task descriptions with context
-func (g *GeminiClient) buildTaskEnrichmentPrompt(task *db.Task, messages []*db.Message) string {
-	var prompt strings.Builder
-
-	prompt.WriteString("You are helping enrich a task description with full context from an email thread.\n\n")
-
-	prompt.WriteString("TASK TO ENRICH:\n")
-	prompt.WriteString(fmt.Sprintf("Title: %s\n", task.Title))
-	if task.Description != "" {
-		prompt.WriteString(fmt.Sprintf("Current Description: %s\n", task.Description))
-	}
-	if task.DueTS != nil {
-		prompt.WriteString(fmt.Sprintf("Due Date: %s\n", task.DueTS.Format("Jan 2, 2006")))
-	}
-	if task.Project != "" {
-		prompt.WriteString(fmt.Sprintf("Project: %s\n", task.Project))
-	}
-	prompt.WriteString("\n")
-
-	prompt.WriteString("EMAIL THREAD CONTEXT:\n")
-	// Show most recent messages first, limit to last 10 for context
-	start := 0
-	if len(messages) > 10 {
-		start = len(messages) - 10
-	}
-	for i := len(messages) - 1; i >= start; i-- {
-		msg := messages[i]
-		prompt.WriteString(fmt.Sprintf("\n--- Message from %s (%s) ---\n", msg.From, msg.Timestamp.Format("Jan 2, 3:04 PM")))
-		prompt.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
-		// Use snippet if available, otherwise truncate body
-		if msg.Snippet != "" && msg.Snippet != msg.Body {
-			prompt.WriteString(fmt.Sprintf("Content: %s\n", msg.Snippet))
-		} else if msg.Body != "" {
-			body := msg.Body
-			if len(body) > 500 {
-				body = body[:500] + "..."
-			}
-			prompt.WriteString(fmt.Sprintf("Content: %s\n", body))
-		}
-	}
-	prompt.WriteString("\n")
-
-	prompt.WriteString("INSTRUCTIONS:\n")
-	prompt.WriteString("Write a rich, contextual description (2-4 sentences) that captures:\n\n")
-	prompt.WriteString("1. WHAT is being asked for and WHY it matters\n")
-	prompt.WriteString("   - The specific deliverable or action needed\n")
-	prompt.WriteString("   - The business context or problem it addresses\n")
-	prompt.WriteString("   - Why this is important right now\n\n")
-
-	prompt.WriteString("2. WHO is involved and their role\n")
-	prompt.WriteString("   - Who requested this (name and role if mentioned)\n")
-	prompt.WriteString("   - Who else is involved or affected\n")
-	prompt.WriteString("   - Any stakeholder concerns or expectations\n\n")
-
-	prompt.WriteString("3. WHEN and timeline context\n")
-	prompt.WriteString("   - Specific deadline if mentioned\n")
-	prompt.WriteString("   - Reason for the timeline (e.g., 'for board meeting', 'before launch')\n")
-	prompt.WriteString("   - Any time-sensitivity or urgency drivers\n\n")
-
-	prompt.WriteString("4. HOW this connects to broader work\n")
-	prompt.WriteString("   - Related projects or initiatives\n")
-	prompt.WriteString("   - Dependencies or prerequisites\n")
-	prompt.WriteString("   - Expected outcomes or success criteria\n\n")
-
-	prompt.WriteString("STYLE GUIDELINES:\n")
-	prompt.WriteString("- Write in clear, professional language\n")
-	prompt.WriteString("- Be specific with names, dates, numbers, and concrete details\n")
-	prompt.WriteString("- Focus on actionable context that helps prioritize and execute\n")
-	prompt.WriteString("- Avoid speculation - only include information from the thread\n")
-	prompt.WriteString("- Keep it concise: 2-4 sentences maximum\n\n")
-
-	prompt.WriteString("EXAMPLE OUTPUT:\n")
-	prompt.WriteString("\"Sarah Chen (VP Finance) requested a detailed review of Q3 budget variances by Friday EOB for the board meeting. She's particularly concerned about the 12% overspend in APAC marketing and needs specific recommendations on cost optimization opportunities to present to the board. This connects to our Q4 profitability targets and may affect the marketing automation project timeline.\"\n\n")
-
-	prompt.WriteString("Now write the enriched description (2-4 sentences only, no preamble):\n")
-
-	return prompt.String()
 }
 
 // parseStrategicAlignmentResponse parses the LLM response for strategic alignment
@@ -1121,8 +813,37 @@ func (g *GeminiClient) parseStrategicAlignmentResponse(response string) *Strateg
 //   1. **Title:** X
 //      * **Owner:** Y
 //      * **Due:** Z
+// isMeetingInvitationGemini checks if a task title is a meeting invitation (should be filtered)
+func isMeetingInvitationGemini(title string) bool {
+	titleLower := strings.ToLower(title)
+	meetingPatterns := []string{
+		"respond to meeting invitation",
+		"accept meeting",
+		"decline meeting",
+		"confirm availability for meeting",
+		"rsvp to",
+		"reply to invitation",
+		"accept invitation",
+		"respond to invitation",
+		// Calendar event patterns
+		"join ",
+		"attend ",
+		"lead ",
+		"host ",
+		"participate in",
+	}
+
+	for _, pattern := range meetingPatterns {
+		if strings.Contains(titleLower, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *GeminiClient) parseTasksFromResponse(response string) []*db.Task {
 	var tasks []*db.Task
+	seenTitles := make(map[string]bool) // Track duplicate titles
 
 	lines := strings.Split(response, "\n")
 	var currentTask *db.Task
@@ -1148,19 +869,23 @@ func (g *GeminiClient) parseTasksFromResponse(response string) []*db.Task {
 		isNewTask := regexp.MustCompile(`^\d+\.`).MatchString(line)
 
 		if isNewTask {
-			// Save previous task if exists
-			if currentTask != nil && currentTask.Title != "" {
-				tasks = append(tasks, currentTask)
+			// Save previous task if exists (skip meeting invitations and duplicates)
+			if currentTask != nil && currentTask.Title != "" && !isMeetingInvitationGemini(currentTask.Title) {
+				titleLower := strings.ToLower(currentTask.Title)
+				if !seenTitles[titleLower] {
+					seenTitles[titleLower] = true
+					tasks = append(tasks, currentTask)
+				}
 			}
 
 			// Start new task
 			currentTask = &db.Task{
-				ID:     fmt.Sprintf("ai_%d", time.Now().UnixNano()),
-				Source: "ai",
-				Status: "pending",
-				Impact: 2,
-				Urgency: 2,
-				Effort: "M",
+				ID:      fmt.Sprintf("ai_%d", time.Now().UnixNano()),
+				Source:  "ai",
+				Status:  "pending",
+				Impact:  3, // Default medium impact
+				Urgency: 3, // Default medium urgency
+				Effort:  "M", // Default medium effort
 			}
 
 			// Remove numbered prefix
@@ -1183,9 +908,13 @@ func (g *GeminiClient) parseTasksFromResponse(response string) []*db.Task {
 		g.parseTaskField(currentTask, line)
 	}
 
-	// Add last task
-	if currentTask != nil && currentTask.Title != "" {
-		tasks = append(tasks, currentTask)
+	// Add last task (skip meeting invitations and duplicates)
+	if currentTask != nil && currentTask.Title != "" && !isMeetingInvitationGemini(currentTask.Title) {
+		titleLower := strings.ToLower(currentTask.Title)
+		if !seenTitles[titleLower] {
+			seenTitles[titleLower] = true
+			tasks = append(tasks, currentTask)
+		}
 	}
 
 	return tasks
@@ -1199,26 +928,61 @@ func (g *GeminiClient) parseTaskField(task *db.Task, field string) {
 
 	field = strings.TrimSpace(field)
 
-	if strings.HasPrefix(field, "Title:") {
+	fieldLower := strings.ToLower(field)
+
+	if strings.HasPrefix(field, "Title:") || strings.HasPrefix(fieldLower, "title:") {
 		task.Title = strings.TrimSpace(strings.TrimPrefix(field, "Title:"))
+		task.Title = strings.TrimSpace(strings.TrimPrefix(task.Title, "title:"))
+	} else if strings.HasPrefix(field, "Impact:") || strings.HasPrefix(fieldLower, "impact:") {
+		impactStr := strings.TrimSpace(strings.TrimPrefix(field, "Impact:"))
+		impactStr = strings.TrimSpace(strings.TrimPrefix(impactStr, "impact:"))
+		if val, err := strconv.Atoi(impactStr); err == nil && val >= 1 && val <= 5 {
+			task.Impact = val
+		}
+	} else if strings.HasPrefix(field, "Urgency:") || strings.HasPrefix(fieldLower, "urgency:") {
+		urgencyStr := strings.TrimSpace(strings.TrimPrefix(field, "Urgency:"))
+		urgencyStr = strings.TrimSpace(strings.TrimPrefix(urgencyStr, "urgency:"))
+		if val, err := strconv.Atoi(urgencyStr); err == nil && val >= 1 && val <= 5 {
+			task.Urgency = val
+		}
+	} else if strings.HasPrefix(field, "Effort:") || strings.HasPrefix(fieldLower, "effort:") {
+		effortStr := strings.TrimSpace(strings.TrimPrefix(field, "Effort:"))
+		effortStr = strings.TrimSpace(strings.TrimPrefix(effortStr, "effort:"))
+		effortStr = strings.ToUpper(effortStr)
+		if effortStr == "S" || effortStr == "M" || effortStr == "L" {
+			task.Effort = effortStr
+		}
+	} else if strings.HasPrefix(field, "Stakeholder:") || strings.HasPrefix(fieldLower, "stakeholder:") {
+		stakeholderStr := strings.TrimSpace(strings.TrimPrefix(field, "Stakeholder:"))
+		stakeholderStr = strings.TrimSpace(strings.TrimPrefix(stakeholderStr, "stakeholder:"))
+		task.Stakeholder = stakeholderStr
+	} else if strings.HasPrefix(field, "Project:") || strings.HasPrefix(fieldLower, "project:") {
+		projectStr := strings.TrimSpace(strings.TrimPrefix(field, "Project:"))
+		projectStr = strings.TrimSpace(strings.TrimPrefix(projectStr, "project:"))
+		task.Project = projectStr
 	} else if strings.HasPrefix(field, "Owner:") {
 		task.Stakeholder = strings.TrimSpace(strings.TrimPrefix(field, "Owner:"))
-	} else if strings.HasPrefix(field, "Due:") {
+	} else if strings.HasPrefix(field, "Due:") || strings.HasPrefix(fieldLower, "due:") {
 		dueStr := strings.TrimSpace(strings.TrimPrefix(field, "Due:"))
+		dueStr = strings.TrimSpace(strings.TrimPrefix(dueStr, "due:"))
 		task.DueTS = parseDueDate(dueStr)
 		if task.DueTS != nil {
 			task.Urgency = maxInt(task.Urgency, calculateUrgencyFromDue(*task.DueTS))
 		}
 	} else if strings.HasPrefix(field, "Priority:") {
+		// Legacy support for old format
 		priorityStr := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(field, "Priority:")))
-		if strings.Contains(priorityStr, "high") {
-			task.Impact = 4
-			task.Urgency = maxInt(task.Urgency, 4)
-		} else if strings.Contains(priorityStr, "medium") {
-			task.Impact = 3
-			task.Urgency = maxInt(task.Urgency, 3)
-		} else {
-			task.Impact = 2
+		// Only override if impact not explicitly set
+		if task.Impact == 2 || task.Impact == 3 {
+			if strings.Contains(priorityStr, "high") {
+				task.Impact = 4
+				task.Urgency = maxInt(task.Urgency, 4)
+			} else if strings.Contains(priorityStr, "medium") {
+				task.Impact = 3
+				task.Urgency = maxInt(task.Urgency, 3)
+			} else {
+				task.Impact = 2
+			}
 		}
 	} else if task.Title == "" && len(field) > 10 {
 		// If no title yet and this is a substantial line, use it as the title
@@ -1273,8 +1037,8 @@ func calculateUrgencyFromDue(dueDate time.Time) int {
 	switch {
 	case hoursUntil <= 0:
 		return 5 // Overdue
-	case hoursUntil <= 24:
-		return 5 // Today
+	case hoursUntil <= 48:
+		return 5 // Today or tomorrow (within 48 hours)
 	case hoursUntil <= 72:
 		return 4 // Next 3 days
 	case hoursUntil <= 168:

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,10 +21,11 @@ type OllamaClient struct {
 	baseURL    string
 	model      string
 	httpClient *http.Client
+	prompts    *PromptBuilder
 }
 
 // NewOllamaClient creates a new Ollama client
-func NewOllamaClient(baseURL, model string) *OllamaClient {
+func NewOllamaClient(baseURL, model string, prompts *PromptBuilder) *OllamaClient {
 	if baseURL == "" {
 		baseURL = "http://alex-mm:11434"
 	}
@@ -34,6 +36,7 @@ func NewOllamaClient(baseURL, model string) *OllamaClient {
 	return &OllamaClient{
 		baseURL: baseURL,
 		model:   model,
+		prompts: prompts,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute, // Generous timeout for model operations
 		},
@@ -160,8 +163,8 @@ func (c *OllamaClient) Ping(ctx context.Context) error {
 
 // EvaluateStrategicAlignment evaluates how well a task aligns with strategic priorities
 func (c *OllamaClient) EvaluateStrategicAlignment(ctx context.Context, task *db.Task, priorities *config.Priorities) (*StrategicAlignmentResult, error) {
-	// Build the strategic alignment prompt (same as Gemini uses)
-	prompt := c.buildStrategicAlignmentPrompt(task, priorities)
+	// Build the strategic alignment prompt
+	prompt := c.prompts.BuildStrategicAlignment(task, priorities)
 
 	// Request JSON format
 	response, err := c.GenerateWithFormat(ctx, prompt, "json")
@@ -171,72 +174,6 @@ func (c *OllamaClient) EvaluateStrategicAlignment(ctx context.Context, task *db.
 
 	// Parse the response using same parser as Gemini
 	return c.parseStrategicAlignmentResponse(response), nil
-}
-
-// buildStrategicAlignmentPrompt creates the prompt for strategic alignment evaluation
-func (c *OllamaClient) buildStrategicAlignmentPrompt(task *db.Task, priorities *config.Priorities) string {
-	var prompt strings.Builder
-
-	prompt.WriteString("Evaluate how well this task aligns with the following strategic priorities.\n\n")
-
-	prompt.WriteString("TASK:\n")
-	prompt.WriteString(fmt.Sprintf("Title: %s\n", task.Title))
-	if task.Description != "" {
-		prompt.WriteString(fmt.Sprintf("Description: %s\n", task.Description))
-	}
-	if task.Project != "" {
-		prompt.WriteString(fmt.Sprintf("Project: %s\n", task.Project))
-	}
-	prompt.WriteString("\n")
-
-	prompt.WriteString("STRATEGIC PRIORITIES:\n\n")
-
-	if len(priorities.OKRs) > 0 {
-		prompt.WriteString("OKRs (Objectives & Key Results):\n")
-		for _, okr := range priorities.OKRs {
-			prompt.WriteString(fmt.Sprintf("  - %s\n", okr))
-		}
-		prompt.WriteString("\n")
-	}
-
-	if len(priorities.FocusAreas) > 0 {
-		prompt.WriteString("Focus Areas:\n")
-		for _, area := range priorities.FocusAreas {
-			prompt.WriteString(fmt.Sprintf("  - %s\n", area))
-		}
-		prompt.WriteString("\n")
-	}
-
-	if len(priorities.KeyProjects) > 0 {
-		prompt.WriteString("Key Projects:\n")
-		for _, project := range priorities.KeyProjects {
-			prompt.WriteString(fmt.Sprintf("  - %s\n", project))
-		}
-		prompt.WriteString("\n")
-	}
-
-	prompt.WriteString("INSTRUCTIONS:\n")
-	prompt.WriteString("Evaluate the DIRECT, MEANINGFUL alignment between this task and the strategic priorities.\n\n")
-	prompt.WriteString("STRICT MATCHING RULES:\n")
-	prompt.WriteString("1. Only match if the task DIRECTLY advances or relates to the priority\n")
-	prompt.WriteString("2. Shared keywords alone are NOT sufficient (e.g., 'data team' ≠ 'Data lake project')\n")
-	prompt.WriteString("3. Generic administrative tasks (scheduling, coordinating, reporting) should NOT match strategic priorities unless they're specifically about implementing/advancing that priority\n")
-	prompt.WriteString("4. Be conservative - when in doubt, DON'T match\n\n")
-	prompt.WriteString("EXAMPLES OF POOR MATCHES TO AVOID:\n")
-	prompt.WriteString("- 'Schedule meeting about X' does NOT align with X unless the meeting is to implement/advance X\n")
-	prompt.WriteString("- 'Send report to team' does NOT align with 'Improved forecasting' just because both involve data\n")
-	prompt.WriteString("- 'Review document' does NOT align unless reviewing is part of implementing the priority\n\n")
-
-	prompt.WriteString("Respond with a JSON object with these exact fields:\n")
-	prompt.WriteString("{\n")
-	prompt.WriteString("  \"score\": <number from 0.0 to 5.0>,\n")
-	prompt.WriteString("  \"okrs\": [<array of OKR names that genuinely align>],\n")
-	prompt.WriteString("  \"focus_areas\": [<array of focus area names that align>],\n")
-	prompt.WriteString("  \"projects\": [<array of project names that align>],\n")
-	prompt.WriteString("  \"reasoning\": \"<brief explanation of evaluation>\"\n")
-	prompt.WriteString("}\n")
-
-	return prompt.String()
 }
 
 // parseStrategicAlignmentResponse parses the JSON response from strategic alignment
@@ -294,7 +231,7 @@ func (c *OllamaClient) parseStrategicAlignmentResponse(response string) *Strateg
 
 // SummarizeThread generates a concise summary of an email thread
 func (c *OllamaClient) SummarizeThread(ctx context.Context, messages []*db.Message) (string, error) {
-	prompt := c.buildThreadSummaryPrompt(messages)
+	prompt := c.prompts.BuildThreadSummary(messages)
 
 	response, err := c.Generate(ctx, prompt)
 	if err != nil {
@@ -304,33 +241,9 @@ func (c *OllamaClient) SummarizeThread(ctx context.Context, messages []*db.Messa
 	return strings.TrimSpace(response), nil
 }
 
-// buildThreadSummaryPrompt creates a prompt for thread summarization
-func (c *OllamaClient) buildThreadSummaryPrompt(messages []*db.Message) string {
-	var prompt strings.Builder
-
-	prompt.WriteString("Summarize this email thread concisely. Focus on:\n")
-	prompt.WriteString("1. Main topic/issue\n")
-	prompt.WriteString("2. Key decisions or action items\n")
-	prompt.WriteString("3. Who needs to do what\n")
-	prompt.WriteString("4. Deadlines mentioned\n")
-	prompt.WriteString("5. Any risks or blockers\n\n")
-
-	prompt.WriteString("Thread:\n")
-	for _, msg := range messages {
-		prompt.WriteString(fmt.Sprintf("From: %s\n", msg.From))
-		prompt.WriteString(fmt.Sprintf("Date: %s\n", msg.Timestamp.Format("Jan 2, 3:04 PM")))
-		prompt.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
-		prompt.WriteString(fmt.Sprintf("Content: %s\n\n", msg.Snippet))
-	}
-
-	prompt.WriteString("Summary (be concise, max 200 words):")
-
-	return prompt.String()
-}
-
 // ExtractTasks extracts action items from content
 func (c *OllamaClient) ExtractTasks(ctx context.Context, content, userEmail string) ([]*db.Task, error) {
-	prompt := c.buildTaskExtractionPrompt(content, userEmail)
+	prompt := c.prompts.BuildTaskExtraction(content)
 
 	response, err := c.Generate(ctx, prompt)
 	if err != nil {
@@ -347,49 +260,43 @@ func (c *OllamaClient) ExtractTasks(ctx context.Context, content, userEmail stri
 	return tasks, nil
 }
 
-// buildTaskExtractionPrompt creates a prompt for task extraction
-func (c *OllamaClient) buildTaskExtractionPrompt(content, userEmail string) string {
-	if userEmail == "" {
-		userEmail = "the user"
-	}
-
-	return fmt.Sprintf(`Extract action items from this content that I (%s) need to do or respond to.
-
-IMPORTANT RULES:
-- INCLUDE tasks where I am responsible or need to take action
-- INCLUDE implicit actions directed at me (e.g., "you should review", "recipient needs to", "please confirm")
-- INCLUDE invitations, meeting requests, and events I'm invited to
-- INCLUDE requests for my input, approval, or response
-- INCLUDE deadlines and due dates that affect me
-- INCLUDE tasks with no owner specified (assume they're for me)
-- SKIP only tasks explicitly assigned to other specific people (e.g., "Andrew: do X", "Maria: review Y")
-
-For each task, provide:
-- Title (brief, actionable description)
-- Owner (use "me" for tasks assigned to me)
-- Due date/urgency (if mentioned)
-- Priority (High/Medium/Low based on context and urgency)
-
-Content:
-%s
-
-Format as a numbered list. Example:
-1. Title: Review Q3 budget | Owner: me | Due: Friday | Priority: High
-2. Title: Attend M365 cyber resiliency event | Owner: me | Due: Oct 30 | Priority: Medium
-3. Title: Respond to meeting invitation | Owner: me | Due: This week | Priority: Medium
-
-If there are NO action items for me, respond with: "No tasks found."
-`, userEmail, content)
-}
-
 // EnrichTaskDescription generates a rich task description
 func (c *OllamaClient) EnrichTaskDescription(ctx context.Context, prompt string) (string, error) {
 	return c.GenerateWithFormat(ctx, prompt, "json")
 }
 
+// isMeetingInvitation checks if a task title is a meeting invitation (should be filtered)
+func isMeetingInvitation(title string) bool {
+	titleLower := strings.ToLower(title)
+	meetingPatterns := []string{
+		"respond to meeting invitation",
+		"accept meeting",
+		"decline meeting",
+		"confirm availability for meeting",
+		"rsvp to",
+		"reply to invitation",
+		"accept invitation",
+		"respond to invitation",
+		// Calendar event patterns
+		"join ",
+		"attend ",
+		"lead ",
+		"host ",
+		"participate in",
+	}
+
+	for _, pattern := range meetingPatterns {
+		if strings.Contains(titleLower, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 // parseTasksFromResponse parses the task extraction response
 func (c *OllamaClient) parseTasksFromResponse(response string) []*db.Task {
 	var tasks []*db.Task
+	seenTitles := make(map[string]bool) // Track duplicate titles
 
 	// Check for "no tasks" response
 	if strings.Contains(strings.ToLower(response), "no tasks found") ||
@@ -422,8 +329,8 @@ func (c *OllamaClient) parseTasksFromResponse(response string) []*db.Task {
 		task := &db.Task{
 			Source:  "gmail",
 			Status:  "pending",
-			Impact:  2, // Default medium impact
-			Urgency: 2, // Default medium urgency
+			Impact:  3, // Default medium impact
+			Urgency: 3, // Default medium urgency
 			Effort:  "M", // Default medium effort
 		}
 
@@ -431,34 +338,78 @@ func (c *OllamaClient) parseTasksFromResponse(response string) []*db.Task {
 		parts := strings.Split(line, "|")
 		for _, part := range parts {
 			part = strings.TrimSpace(part)
+			partLower := strings.ToLower(part)
 
-			if strings.HasPrefix(strings.ToLower(part), "title:") {
+			if strings.HasPrefix(partLower, "title:") {
 				task.Title = strings.TrimSpace(strings.TrimPrefix(part, "Title:"))
 				task.Title = strings.TrimSpace(strings.TrimPrefix(task.Title, "title:"))
-			} else if strings.HasPrefix(strings.ToLower(part), "priority:") {
+			} else if strings.HasPrefix(partLower, "impact:") {
+				impactStr := strings.TrimSpace(strings.TrimPrefix(part, "Impact:"))
+				impactStr = strings.TrimSpace(strings.TrimPrefix(impactStr, "impact:"))
+				// Parse as integer 1-5
+				if val, err := strconv.Atoi(impactStr); err == nil && val >= 1 && val <= 5 {
+					task.Impact = val
+				}
+			} else if strings.HasPrefix(partLower, "urgency:") {
+				urgencyStr := strings.TrimSpace(strings.TrimPrefix(part, "Urgency:"))
+				urgencyStr = strings.TrimSpace(strings.TrimPrefix(urgencyStr, "urgency:"))
+				// Parse as integer 1-5
+				if val, err := strconv.Atoi(urgencyStr); err == nil && val >= 1 && val <= 5 {
+					task.Urgency = val
+				}
+			} else if strings.HasPrefix(partLower, "effort:") {
+				effortStr := strings.TrimSpace(strings.TrimPrefix(part, "Effort:"))
+				effortStr = strings.TrimSpace(strings.TrimPrefix(effortStr, "effort:"))
+				effortStr = strings.ToUpper(effortStr)
+				// Validate S/M/L
+				if effortStr == "S" || effortStr == "M" || effortStr == "L" {
+					task.Effort = effortStr
+				}
+			} else if strings.HasPrefix(partLower, "stakeholder:") {
+				stakeholderStr := strings.TrimSpace(strings.TrimPrefix(part, "Stakeholder:"))
+				stakeholderStr = strings.TrimSpace(strings.TrimPrefix(stakeholderStr, "stakeholder:"))
+				task.Stakeholder = stakeholderStr
+			} else if strings.HasPrefix(partLower, "project:") {
+				projectStr := strings.TrimSpace(strings.TrimPrefix(part, "Project:"))
+				projectStr = strings.TrimSpace(strings.TrimPrefix(projectStr, "project:"))
+				task.Project = projectStr
+			} else if strings.HasPrefix(partLower, "due:") {
+				dueStr := strings.TrimSpace(strings.TrimPrefix(part, "Due:"))
+				dueStr = strings.TrimSpace(strings.TrimPrefix(dueStr, "due:"))
+				// Store due date string for later parsing
+				// TODO: Parse relative dates like "tomorrow", "Friday", "Oct 30"
+				task.Description = "Due: " + dueStr
+			} else if strings.HasPrefix(partLower, "priority:") {
+				// Legacy support for old format
 				priority := strings.TrimSpace(strings.TrimPrefix(part, "Priority:"))
 				priority = strings.TrimSpace(strings.TrimPrefix(priority, "priority:"))
 				priority = strings.ToLower(priority)
 
-				// Map to impact and urgency scores
-				switch priority {
-				case "high", "critical", "urgent":
-					task.Impact = 5
-					task.Urgency = 4
-				case "medium", "moderate":
-					task.Impact = 3
-					task.Urgency = 3
-				case "low":
-					task.Impact = 1
-					task.Urgency = 2
+				// Map to impact and urgency scores (fallback if not explicitly set)
+				if task.Impact == 3 { // Only override default
+					switch priority {
+					case "high", "critical", "urgent":
+						task.Impact = 5
+						task.Urgency = 4
+					case "medium", "moderate":
+						task.Impact = 3
+						task.Urgency = 3
+					case "low":
+						task.Impact = 2
+						task.Urgency = 2
+					}
 				}
 			}
-			// Note: Owner and Due parsing could be added here if needed
 		}
 
-		// Only add if we got a title
-		if task.Title != "" {
-			tasks = append(tasks, task)
+		// Only add if we got a title, it's not a meeting invitation, and not a duplicate
+		if task.Title != "" && !isMeetingInvitation(task.Title) {
+			// Check for duplicate title
+			titleLower := strings.ToLower(task.Title)
+			if !seenTitles[titleLower] {
+				seenTitles[titleLower] = true
+				tasks = append(tasks, task)
+			}
 		}
 	}
 

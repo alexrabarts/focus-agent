@@ -257,9 +257,9 @@ func (m *TasksModel) View() string {
 
 	for _, task := range m.tasks {
 		switch {
-		case task.Score >= 4.0:
+		case task.Score >= 80.0:
 			highPriority = append(highPriority, task)
-		case task.Score >= 2.5:
+		case task.Score >= 62.0:
 			mediumPriority = append(mediumPriority, task)
 		default:
 			lowPriority = append(lowPriority, task)
@@ -356,7 +356,7 @@ func (m TasksModel) renderTask(task *db.Task, taskNumber int, selected bool) str
 		meta = fmt.Sprintf(" [%s]", task.Source)
 	}
 
-	taskText := fmt.Sprintf("%s%d. %s%s - Score: %.1f", cursor, taskNumber, title, meta, task.Score)
+	taskText := fmt.Sprintf("%s%d. %s%s - Score: %.0f%%", cursor, taskNumber, title, meta, task.Score)
 
 	if selected {
 		return selectedStyle.Render(taskText) + "\n"
@@ -531,12 +531,12 @@ func (m *TasksModel) renderTaskDetail() string {
 		strategicDetail = "No strategic matches"
 	}
 
-	// Calculate contributions
-	impactContribution := 0.3 * impact
-	urgencyContribution := 0.25 * urgency
-	effortContribution := -0.1 * effortFactor
-	stakeholderContribution := 0.15 * stakeholderWeight
-	strategicContribution := 0.2 * strategicScore
+	// Calculate contributions as percentage points (0-100 scale)
+	impactContribution := (0.2 * impact / 4.0) * 100.0
+	urgencyContribution := (0.25 * urgency / 4.0) * 100.0
+	effortContribution := (-0.1 * effortFactor / 4.0) * 100.0
+	stakeholderContribution := (0.15 * stakeholderWeight / 4.0) * 100.0
+	strategicContribution := (0.3 * strategicScore / 4.0) * 100.0
 
 	// Impact description
 	impactDesc := ""
@@ -579,20 +579,20 @@ func (m *TasksModel) renderTaskDetail() string {
 		effortDesc = "Full day+ (>4 hours)"
 	}
 
-	b.WriteString(scoreStyle.Render("Formula: 0.3×impact + 0.25×urgency + 0.2×strategic - 0.1×effort + 0.15×stakeholder") + "\n\n")
-	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Impact: %.0f/5 - %s (weight: 0.3) → +%.2f", impact, impactDesc, impactContribution)) + "\n")
-	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Urgency: %.0f/5 - %s (weight: 0.25) → +%.2f", urgency, urgencyDesc, urgencyContribution)) + "\n")
-	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Strategic Alignment: %.1f/5 - %s (weight: 0.2) → +%.2f", strategicScore, strategicDetail, strategicContribution)) + "\n")
-	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Effort: %s - %s (%.1f, weight: -0.1) → %.2f", effortLabel, effortDesc, effortFactor, effortContribution)) + "\n")
+	b.WriteString(scoreStyle.Render("Formula: 0.3×strategic + 0.25×urgency + 0.2×impact - 0.1×effort + 0.15×stakeholder") + "\n\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Strategic Alignment: %.1f/5 - %s (weight: 0.3) → +%.0f%%", strategicScore, strategicDetail, strategicContribution)) + "\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Urgency: %.0f/5 - %s (weight: 0.25) → +%.0f%%", urgency, urgencyDesc, urgencyContribution)) + "\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Impact: %.0f/5 - %s (weight: 0.2) → +%.0f%%", impact, impactDesc, impactContribution)) + "\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("├─ Effort: %s - %s (%.1f, weight: -0.1) → %.0f%%", effortLabel, effortDesc, effortFactor, effortContribution)) + "\n")
 
 	// Show stakeholder detail if there is one
 	if task.Stakeholder != "" {
-		b.WriteString(scoreStyle.Render(fmt.Sprintf("└─ Stakeholder: %s - %s (%.1f, weight: 0.15) → +%.2f", stakeholderLabel, task.Stakeholder, stakeholderWeight, stakeholderContribution)) + "\n")
+		b.WriteString(scoreStyle.Render(fmt.Sprintf("└─ Stakeholder: %s - %s (%.1f, weight: 0.15) → +%.0f%%", stakeholderLabel, task.Stakeholder, stakeholderWeight, stakeholderContribution)) + "\n")
 	} else {
-		b.WriteString(scoreStyle.Render(fmt.Sprintf("└─ Stakeholder: %s (%.1f, weight: 0.15) → +%.2f", stakeholderLabel, stakeholderWeight, stakeholderContribution)) + "\n")
+		b.WriteString(scoreStyle.Render(fmt.Sprintf("└─ Stakeholder: %s (%.1f, weight: 0.15) → +%.0f%%", stakeholderLabel, stakeholderWeight, stakeholderContribution)) + "\n")
 	}
 	b.WriteString(scoreStyle.Render("──────────────────────────────────────────") + "\n")
-	b.WriteString(scoreStyle.Render(fmt.Sprintf("Total Score: %.2f/5", task.Score)) + "\n")
+	b.WriteString(scoreStyle.Render(fmt.Sprintf("Total Score: %.0f%%", task.Score)) + "\n")
 
 	// Strategic Alignment Matches section
 	if task.MatchedPriorities != "" && task.MatchedPriorities != "{}" && task.MatchedPriorities != "null" {
@@ -641,37 +641,115 @@ func (m *TasksModel) renderTaskDetail() string {
 		}
 	}
 
-	// Source Context section (for AI tasks)
-	if task.Source == "ai" && task.SourceID != "" {
+	// Email Thread Context section (for AI and Gmail tasks)
+	if (task.Source == "ai" || task.Source == "gmail") && task.SourceID != "" {
 		b.WriteString("\n")
 		contextTitleStyle := lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("13")).
 			Padding(0, 1)
 
-		b.WriteString(contextTitleStyle.Render("🔗 Source Context:") + "\n")
+		b.WriteString(contextTitleStyle.Render("📧 Email Thread Context:") + "\n")
 
 		contextStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("250")).
 			Padding(0, 2)
 
-		b.WriteString(contextStyle.Render(fmt.Sprintf("Extracted from email thread: %s", task.SourceID)) + "\n")
-
-		// Try to fetch thread summary
 		var thread *db.Thread
+		var messages []*db.Message
+
 		if m.apiClient != nil {
-			// Would need to add API endpoint for this
-			b.WriteString(contextStyle.Render("(Thread summary not available in remote mode)") + "\n")
+			// Use API client to fetch thread and messages
+			thread, _ = m.apiClient.GetThreadByID(task.SourceID)
+			messages, _ = m.apiClient.GetThreadMessages(task.SourceID)
 		} else {
+			// Get thread and messages from database
 			thread, _ = m.database.GetThreadByID(task.SourceID)
-			if thread != nil && thread.Summary != "" {
-				// Render full summary with word wrapping
-				summaryStyle := lipgloss.NewStyle().
-					Foreground(lipgloss.Color("250")).
-					Width(90).  // Set max width for wrapping
-					Padding(0, 2)
-				b.WriteString(summaryStyle.Render(thread.Summary) + "\n")
+			messages, _ = m.database.GetThreadMessages(task.SourceID)
+		}
+
+		// Show thread summary if available (works for both remote and local)
+		if thread != nil && thread.Summary != "" {
+			b.WriteString("\n")
+			summaryLabelStyle := lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("250")).
+				Padding(0, 2)
+			b.WriteString(summaryLabelStyle.Render("AI Summary:") + "\n")
+
+			summaryStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("244")).
+				Italic(true).
+				Width(90).
+				Padding(0, 2)
+			b.WriteString(summaryStyle.Render(thread.Summary) + "\n")
+		}
+
+		// Show email messages (works for both remote and local)
+		if len(messages) > 0 {
+			b.WriteString("\n")
+			messagesLabelStyle := lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("250")).
+				Padding(0, 2)
+			b.WriteString(messagesLabelStyle.Render(fmt.Sprintf("Messages (%d):", len(messages))) + "\n\n")
+
+			messageHeaderStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("39")).
+				Padding(0, 2)
+
+			messageBodyStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("252")).
+				Width(88).
+				Padding(0, 4)
+
+			// Show up to 5 most recent messages
+			start := 0
+			if len(messages) > 5 {
+				start = len(messages) - 5
+				b.WriteString(contextStyle.Render(fmt.Sprintf("(Showing last 5 of %d messages)", len(messages))) + "\n\n")
 			}
+
+			for i := start; i < len(messages); i++ {
+				msg := messages[i]
+
+				// Message header: From + Timestamp
+				header := fmt.Sprintf("From: %s • %s",
+					msg.From,
+					msg.Timestamp.Format("Jan 2, 3:04 PM"))
+				b.WriteString(messageHeaderStyle.Render(header) + "\n")
+
+				// Subject (if different from thread subject or first message)
+				if i == 0 || msg.Subject != messages[i-1].Subject {
+					subjectStyle := lipgloss.NewStyle().
+						Foreground(lipgloss.Color("243")).
+						Padding(0, 4)
+					b.WriteString(subjectStyle.Render(fmt.Sprintf("Subject: %s", msg.Subject)) + "\n")
+				}
+
+				// Message body/snippet (truncated if too long)
+				content := msg.Body
+				if content == "" {
+					content = msg.Snippet
+				}
+
+				// Truncate if over 200 chars
+				if len(content) > 200 {
+					content = content[:200] + "..."
+				}
+
+				b.WriteString(messageBodyStyle.Render(content) + "\n")
+
+				// Separator between messages
+				if i < len(messages)-1 {
+					separatorStyle := lipgloss.NewStyle().
+						Foreground(lipgloss.Color("236")).
+						Padding(0, 2)
+					b.WriteString(separatorStyle.Render("─────────────────────────────────────────") + "\n")
+				}
+			}
+		} else {
+			b.WriteString(contextStyle.Render("(No messages found for this thread)") + "\n")
 		}
 	}
 

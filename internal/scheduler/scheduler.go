@@ -605,6 +605,12 @@ func (s *Scheduler) ProcessNewMessages() {
 
 			if err := s.db.SaveTask(task); err != nil {
 				log.Printf("Failed to save extracted task: %v", err)
+				continue
+			}
+
+			// Score task immediately after extraction (parallel scoring)
+			if err := s.planner.PrioritizeTask(s.ctx, task); err != nil {
+				log.Printf("Failed to prioritize task '%s': %v", task.Title, err)
 			}
 		}
 
@@ -637,6 +643,7 @@ func (s *Scheduler) ProcessNewMessages() {
 	log.Printf("   Total time: %v", elapsed.Round(time.Second))
 	log.Printf("   Actual tokens used: %d", totalTokens)
 	log.Printf("   Actual cost: $%.4f", totalCost)
+	log.Printf("   Tasks scored immediately during extraction")
 	log.Println("═══════════════════════════════════════════════════════")
 }
 
@@ -734,7 +741,9 @@ func (s *Scheduler) EnrichExistingTasks() error {
 
 	// Process each task
 	for i, info := range tasksToEnrich {
-		log.Printf("Enriching task %d/%d: %s", i+1, len(tasksToEnrich), info.task.Title)
+		remaining := len(tasksToEnrich) - i
+		log.Printf("[Queue: %d remaining] Enriching task %d/%d: %s",
+			remaining, i+1, len(tasksToEnrich), info.task.Title)
 
 		// Get messages for the thread
 		messagesQuery := `
@@ -783,7 +792,9 @@ func (s *Scheduler) EnrichExistingTasks() error {
 			continue
 		}
 
-		log.Printf("✓ Enriched: %s", enrichedDesc[:min(100, len(enrichedDesc))])
+		remaining = len(tasksToEnrich) - (i + 1)
+		log.Printf("✓ Enriched [%d remaining]: %s",
+			remaining, enrichedDesc[:min(100, len(enrichedDesc))])
 		successCount++
 
 		// Show progress every 10 tasks

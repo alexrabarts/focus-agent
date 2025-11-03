@@ -72,11 +72,13 @@ func (p *Planner) PrioritizeTasks(ctx context.Context) error {
 			task.Urgency = p.calculateUrgencyFromDue(t)
 		}
 
-		// Calculate score and get matched priorities
-		task.Score = p.calculateScore(task)
+		// Get strategic alignment and matched priorities (single LLM call)
+		strategicScore, matches := p.CalculateStrategicAlignmentWithMatches(task)
 
-		// Get matched priorities
-		_, matches := p.CalculateStrategicAlignmentWithMatches(task)
+		// Calculate score using pre-calculated strategic score (avoids double LLM call)
+		task.Score = p.calculateScoreWithStrategic(task, strategicScore)
+
+		// Store matched priorities
 		matchesJSON, err := json.Marshal(matches)
 		if err != nil {
 			log.Printf("Failed to marshal matched priorities: %v", err)
@@ -99,8 +101,45 @@ func (p *Planner) PrioritizeTasks(ctx context.Context) error {
 	return nil
 }
 
+// PrioritizeTask scores a single task immediately (used during extraction)
+func (p *Planner) PrioritizeTask(ctx context.Context, task *db.Task) error {
+	// Update urgency based on due date if present
+	if task.DueTS != nil {
+		task.Urgency = p.calculateUrgencyFromDue(*task.DueTS)
+	}
+
+	// Get strategic alignment and matched priorities (single LLM call)
+	strategicScore, matches := p.CalculateStrategicAlignmentWithMatches(task)
+
+	// Calculate score using pre-calculated strategic score
+	task.Score = p.calculateScoreWithStrategic(task, strategicScore)
+
+	// Store matched priorities
+	matchesJSON, err := json.Marshal(matches)
+	if err != nil {
+		log.Printf("Failed to marshal matched priorities: %v", err)
+		matchesJSON = []byte("{}")
+	}
+	task.MatchedPriorities = string(matchesJSON)
+
+	// Update score, urgency, and matched priorities in database
+	updateQuery := `UPDATE tasks SET score = ?, urgency = ?, matched_priorities = ? WHERE id = ?`
+	if _, err := p.db.Exec(updateQuery, task.Score, task.Urgency, task.MatchedPriorities, task.ID); err != nil {
+		return fmt.Errorf("failed to update task score: %w", err)
+	}
+
+	return nil
+}
+
 // calculateScore implements the scoring formula with strategic alignment
 func (p *Planner) calculateScore(task *db.Task) float64 {
+	// Calculate strategic alignment score (0-5)
+	strategicScore := p.calculateStrategicAlignment(task)
+	return p.calculateScoreWithStrategic(task, strategicScore)
+}
+
+// calculateScoreWithStrategic implements the scoring formula with a pre-calculated strategic score
+func (p *Planner) calculateScoreWithStrategic(task *db.Task, strategicScore float64) float64 {
 	// Default values if not set
 	impact := float64(task.Impact)
 	if impact == 0 {
@@ -130,24 +169,23 @@ func (p *Planner) calculateScore(task *db.Task) float64 {
 		stakeholderWeight = 2.0
 	}
 
-	// Calculate strategic alignment score (0-5)
-	strategicScore := p.calculateStrategicAlignment(task)
-
-	// Apply formula: score = 0.3*impact + 0.25*urgency + 0.2*strategic + 0.15*stakeholder - 0.1*effort
-	score := 0.3*impact +
+	// Apply formula: score = 0.3*strategic + 0.25*urgency + 0.2*impact + 0.15*stakeholder - 0.1*effort
+	rawScore := 0.3*strategicScore +
 		0.25*urgency +
-		0.2*strategicScore +
+		0.2*impact +
 		0.15*stakeholderWeight -
 		0.1*effortFactor
 
-	// Normalize to 0-5 scale
-	if score > 5 {
-		score = 5
-	} else if score < 0 {
-		score = 0
+	// Clamp to valid range
+	if rawScore > 4.0 {
+		rawScore = 4.0
+	} else if rawScore < 0 {
+		rawScore = 0
 	}
 
-	return score
+	// Convert to percentage (0-100) and round to whole number
+	percentage := (rawScore / 4.0) * 100.0
+	return float64(int(percentage + 0.5)) // Round to nearest integer
 }
 
 // calculateStrategicAlignment scores how well a task aligns with strategic priorities
