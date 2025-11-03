@@ -354,6 +354,42 @@ func (c *APIClient) GetThreads() ([]*db.Thread, error) {
 	return result, nil
 }
 
+// GetThreadByID fetches a single thread by ID from the remote API
+func (c *APIClient) GetThreadByID(threadID string) (*db.Thread, error) {
+	path := fmt.Sprintf("/api/threads/%s", threadID)
+	resp, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var thread ThreadResponse
+	if err := json.NewDecoder(resp.Body).Decode(&thread); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Convert to db.Thread
+	var nextFollowupTS *time.Time
+	if thread.NextFollowupTS != nil {
+		parsed, err := time.Parse(time.RFC3339, *thread.NextFollowupTS)
+		if err == nil {
+			nextFollowupTS = &parsed
+		}
+	}
+
+	lastSynced, _ := time.Parse(time.RFC3339, thread.LastSynced)
+
+	return &db.Thread{
+		ID:             thread.ID,
+		LastHistoryID:  thread.LastHistoryID,
+		Summary:        thread.Summary,
+		SummaryHash:    thread.SummaryHash,
+		TaskCount:      thread.TaskCount,
+		NextFollowupTS: nextFollowupTS,
+		LastSynced:     lastSynced,
+	}, nil
+}
+
 // GetThreadMessages fetches messages for a thread from the remote API
 func (c *APIClient) GetThreadMessages(threadID string) ([]*db.Message, error) {
 	path := fmt.Sprintf("/api/threads/%s/messages", threadID)

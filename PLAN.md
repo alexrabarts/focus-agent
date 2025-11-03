@@ -141,6 +141,33 @@ Enable Focus Agent to operate as a shared Chat app across multiple Google Worksp
 
 ## Ideas / Backlog
 
+### Automated Receipt Upload Detection
+**Priority:** Low
+**Status:** Idea
+
+Automatically detect and deduplicate expense receipt upload reminder tasks.
+
+**Problem:** Multiple "Upload missing receipts via Spendesk" tasks are extracted from reminder emails, creating duplicate tasks that clutter the task list.
+
+**Solution:**
+- Detect receipt upload tasks by pattern matching (e.g., "upload.*receipt", "spendesk.*upload")
+- Consolidate duplicate receipt tasks into a single task
+- Track which specific receipts are missing (if mentioned in emails)
+- Mark as completed when Spendesk confirmation email is detected
+- Optionally: Integrate with Spendesk API to auto-check upload status
+
+**Benefits:**
+- Cleaner task list without duplicate reminders
+- Automatic task completion when receipts are uploaded
+- Less manual task management overhead
+- Better visibility into pending expense submissions
+
+**Technical Approach:**
+1. Add post-extraction deduplication rule for receipt upload tasks
+2. Parse email content for specific receipt identifiers (dates, amounts)
+3. Monitor for Spendesk confirmation emails to auto-complete
+4. Consider Spendesk API integration for real-time status
+
 ### Normalize Task Scores to Percentages
 **Priority:** Low
 **Status:** Planned

@@ -29,12 +29,16 @@ type HybridClient struct {
 	gemini            *GeminiClient
 	db                *db.DB
 	config            *config.Config
+	prompts           *PromptBuilder
 }
 
 // NewHybridClient creates a hybrid LLM client with fallback chain: Ollama -> Claude CLI -> Gemini
 func NewHybridClient(geminiAPIKey string, database *db.DB, cfg *config.Config) (*HybridClient, error) {
+	// Create centralized prompt builder
+	prompts := NewPromptBuilder(cfg.Google.UserEmail)
+
 	// Initialize Gemini client as final fallback
-	geminiClient, err := NewGeminiClient(geminiAPIKey, database, cfg)
+	geminiClient, err := NewGeminiClient(geminiAPIKey, database, cfg, prompts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Gemini fallback client: %w", err)
 	}
@@ -46,14 +50,14 @@ func NewHybridClient(geminiAPIKey string, database *db.DB, cfg *config.Config) (
 	if cfg.Ollama.Enabled {
 		// Use distributed client if multiple hosts configured
 		if len(cfg.Ollama.Hosts) > 1 {
-			distributedOllama = NewDistributedOllamaClient(cfg)
+			distributedOllama = NewDistributedOllamaClient(cfg, prompts)
 			if distributedOllama != nil {
 				ollamaInterface = distributedOllama
 			}
 		} else if len(cfg.Ollama.Hosts) == 1 {
 			// Single host - use simple client
 			host := cfg.Ollama.Hosts[0]
-			simpleClient := NewOllamaClient(host.URL, cfg.Ollama.Model)
+			simpleClient := NewOllamaClient(host.URL, cfg.Ollama.Model, prompts)
 
 			// Test connectivity
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -92,6 +96,7 @@ func NewHybridClient(geminiAPIKey string, database *db.DB, cfg *config.Config) (
 		gemini:            geminiClient,
 		db:                database,
 		config:            cfg,
+		prompts:           prompts,
 	}, nil
 }
 
@@ -141,7 +146,7 @@ func (h *HybridClient) extractTasksWithClaude(ctx context.Context, messages []*d
 	}
 
 	// Build task extraction prompt with full message context
-	prompt := h.buildTaskExtractionPromptWithContext(messages, userEmail)
+	prompt := h.prompts.BuildTaskExtractionWithConversationFlow(messages)
 
 	// Check cache
 	hash := h.gemini.hashPrompt(prompt)
@@ -188,78 +193,6 @@ func (h *HybridClient) extractTasksWithClaude(ctx context.Context, messages []*d
 
 	// Parse tasks from JSON response
 	return h.parseTasksFromJSON(response, userEmail)
-}
-
-// buildTaskExtractionPromptWithContext creates an intelligent prompt that considers message flow
-func (h *HybridClient) buildTaskExtractionPromptWithContext(messages []*db.Message, userEmail string) string {
-	displayName := userEmail
-	if displayName == "" {
-		displayName = "the user"
-	}
-
-	var prompt strings.Builder
-
-	prompt.WriteString(fmt.Sprintf(`You are analyzing an email thread to extract action items for %s.
-
-CRITICAL RULES:
-1. ONLY extract tasks that %s needs to do and hasn't already done
-2. Look at the message flow - if %s already completed an action, DON'T create a task
-3. SKIP informational updates that don't require action (e.g., "PC scheduled for Dec 22", "Here's an update")
-4. SKIP requests TO others (e.g., "Can you [someone else] do X")
-5. INCLUDE explicit requests directed at %s (e.g., "Can you review", "Please confirm")
-6. INCLUDE commitments %s made that haven't been fulfilled yet
-7. SKIP invitations or calendar-style events (those are usually on the calendar already)
-
-EXAMPLES OF WHAT TO SKIP:
-- "Your PC is scheduled for December 22nd" → NO TASK (just info)
-- "I've submitted the form" → NO TASK (already done)
-- "Thanks for confirming" → NO TASK (conversation closer)
-- "Can Sarah review this?" → NO TASK (directed at Sarah)
-
-EXAMPLES OF WHAT TO INCLUDE:
-- "Can you review the proposal by Friday?" → YES TASK (explicit request)
-- "I'll send you the report tomorrow" → YES TASK (if user sent this, it's their commitment)
-- "Please confirm once you've reviewed the attachment" → YES TASK (requires action)
-
-EMAIL THREAD:
-`, displayName, displayName, displayName, displayName, displayName, displayName))
-
-	// Add messages in chronological order to show conversation flow
-	for i, msg := range messages {
-		prompt.WriteString(fmt.Sprintf("\n[Message %d]\n", i+1))
-		prompt.WriteString(fmt.Sprintf("From: %s\n", msg.From))
-		prompt.WriteString(fmt.Sprintf("Date: %s\n", msg.Timestamp.Format("Jan 2, 3:04 PM")))
-		prompt.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
-
-		// Use full body if available, otherwise snippet
-		content := msg.Body
-		if content == "" {
-			content = msg.Snippet
-		}
-		prompt.WriteString(fmt.Sprintf("Content:\n%s\n", content))
-	}
-
-	prompt.WriteString(fmt.Sprintf(`
-
-Now extract action items for %s.
-
-Return ONLY valid JSON in this exact format:
-{
-  "tasks": [
-    {
-      "title": "Brief, actionable description",
-      "priority": "High|Medium|Low",
-      "due_date": "YYYY-MM-DD or empty string",
-      "reasoning": "Why this is a task for the user"
-    }
-  ]
-}
-
-If there are NO actionable tasks for %s, return: {"tasks": []}
-
-JSON response:`, displayName, displayName))
-
-	return prompt.String()
 }
 
 // parseTasksFromJSON parses Claude's JSON response into tasks
@@ -344,8 +277,8 @@ func (h *HybridClient) parseTasksFromJSON(response string, userEmail string) ([]
 
 // SummarizeThread summarizes an email thread (Claude primary, Gemini fallback)
 func (h *HybridClient) SummarizeThread(ctx context.Context, messages []*db.Message) (string, error) {
-	// Build prompt (reuse Gemini's prompt builder)
-	prompt := h.gemini.buildThreadSummaryPrompt(messages)
+	// Build prompt
+	prompt := h.prompts.BuildThreadSummary(messages)
 
 	// Check cache first
 	hash := h.gemini.hashPrompt(prompt)
@@ -398,7 +331,7 @@ func (h *HybridClient) SummarizeThreadWithModelSelection(ctx context.Context, me
 
 	// Try Claude CLI second (free, remote API)
 	if h.claudePath != "" {
-		prompt := h.buildThreadSummaryPrompt(messages)
+		prompt := h.prompts.BuildThreadSummary(messages)
 		summary, err := h.callClaude(ctx, prompt)
 		if err == nil && summary != "" {
 			log.Printf("Thread summary generated using Claude CLI")
@@ -410,30 +343,6 @@ func (h *HybridClient) SummarizeThreadWithModelSelection(ctx context.Context, me
 	// Final fallback to Gemini (with Pro/Flash model selection)
 	log.Printf("Using Gemini for thread summarization (fallback)")
 	return h.gemini.SummarizeThreadWithModelSelection(ctx, messages, metadata)
-}
-
-// buildThreadSummaryPrompt creates a prompt for thread summarization (reused by Claude fallback)
-func (h *HybridClient) buildThreadSummaryPrompt(messages []*db.Message) string {
-	var prompt strings.Builder
-
-	prompt.WriteString("Summarize this email thread concisely. Focus on:\n")
-	prompt.WriteString("1. Main topic/issue\n")
-	prompt.WriteString("2. Key decisions or action items\n")
-	prompt.WriteString("3. Who needs to do what\n")
-	prompt.WriteString("4. Deadlines mentioned\n")
-	prompt.WriteString("5. Any risks or blockers\n\n")
-
-	prompt.WriteString("Thread:\n")
-	for _, msg := range messages {
-		prompt.WriteString(fmt.Sprintf("From: %s\n", msg.From))
-		prompt.WriteString(fmt.Sprintf("Date: %s\n", msg.Timestamp.Format("Jan 2, 3:04 PM")))
-		prompt.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
-		prompt.WriteString(fmt.Sprintf("Content: %s\n\n", msg.Snippet))
-	}
-
-	prompt.WriteString("Summary (be concise, max 200 words):")
-
-	return prompt.String()
 }
 
 // ExtractTasks extracts action items with 3-tier fallback
@@ -485,7 +394,7 @@ func (h *HybridClient) ExtractTasksFromMessages(ctx context.Context, content str
 // EnrichTaskDescription generates rich contextual descriptions (Ollama -> Claude CLI -> Gemini fallback)
 func (h *HybridClient) EnrichTaskDescription(ctx context.Context, task *db.Task, messages []*db.Message) (string, error) {
 	// Build prompt
-	prompt := h.gemini.buildTaskEnrichmentPrompt(task, messages)
+	prompt := h.prompts.BuildTaskEnrichment(task, messages)
 
 	// Check cache
 	hash := h.gemini.hashPrompt(prompt)
@@ -553,8 +462,8 @@ func (h *HybridClient) EnrichTaskDescription(ctx context.Context, task *db.Task,
 
 // EvaluateStrategicAlignment evaluates strategic alignment (Ollama -> Claude -> Gemini fallback)
 func (h *HybridClient) EvaluateStrategicAlignment(ctx context.Context, task *db.Task, priorities *config.Priorities) (*StrategicAlignmentResult, error) {
-	// Build prompt (using gemini's prompt builder for consistency)
-	prompt := h.gemini.buildStrategicAlignmentPrompt(task, priorities)
+	// Build prompt
+	prompt := h.prompts.BuildStrategicAlignment(task, priorities)
 
 	// Check cache
 	hash := h.gemini.hashPrompt(prompt)
@@ -631,7 +540,7 @@ func (h *HybridClient) EvaluateStrategicAlignment(ctx context.Context, task *db.
 // DraftReply drafts an email reply (Claude primary, Gemini fallback)
 func (h *HybridClient) DraftReply(ctx context.Context, thread []*db.Message, goal string) (string, error) {
 	// Build prompt
-	prompt := h.gemini.buildReplyPrompt(thread, goal)
+	prompt := h.prompts.BuildReply(thread, goal)
 
 	// Check cache
 	hash := h.gemini.hashPrompt(prompt)
@@ -673,7 +582,7 @@ func (h *HybridClient) DraftReply(ctx context.Context, thread []*db.Message, goa
 // GenerateMeetingPrep generates meeting preparation notes (Claude primary, Gemini fallback)
 func (h *HybridClient) GenerateMeetingPrep(ctx context.Context, event *db.Event, relatedDocs []*db.Document) (string, error) {
 	// Build prompt
-	prompt := h.gemini.buildMeetingPrepPrompt(event, relatedDocs)
+	prompt := h.prompts.BuildMeetingPrep(event, relatedDocs)
 
 	// Check cache
 	hash := h.gemini.hashPrompt(prompt)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,10 +61,12 @@ type DistributedOllamaClient struct {
 	workerWg   sync.WaitGroup
 	shutdownCh chan struct{}
 	isRunning  atomic.Bool
+	prompts    *PromptBuilder
+	maxRetries int // Maximum retry attempts across different hosts
 }
 
 // NewDistributedOllamaClient creates a distributed Ollama client with worker pool
-func NewDistributedOllamaClient(cfg *config.Config) *DistributedOllamaClient {
+func NewDistributedOllamaClient(cfg *config.Config, prompts *PromptBuilder) *DistributedOllamaClient {
 	if !cfg.Ollama.Enabled || len(cfg.Ollama.Hosts) == 0 {
 		return nil
 	}
@@ -89,6 +92,8 @@ func NewDistributedOllamaClient(cfg *config.Config) *DistributedOllamaClient {
 		jobs:       make(chan *OllamaJob, jobQueueSize),
 		stats:      make(map[string]*HostStats),
 		shutdownCh: make(chan struct{}),
+		prompts:    prompts,
+		maxRetries: 3, // Try up to 3 different hosts before giving up
 	}
 
 	// Initialize stats for each host
@@ -115,7 +120,7 @@ func (c *DistributedOllamaClient) startWorkers() {
 
 	for _, host := range c.hosts {
 		// Create a simple OllamaClient for each host
-		hostClient := NewOllamaClient(host.URL, c.model)
+		hostClient := NewOllamaClient(host.URL, c.model, c.prompts)
 		hostClient.httpClient.Timeout = c.timeout
 
 		// Spawn N workers for this host
@@ -145,6 +150,21 @@ func (c *DistributedOllamaClient) worker(client *OllamaClient, hostName string, 
 			c.processJob(client, hostName, workerID, job)
 		}
 	}
+}
+
+// isRetryableError determines if an error is worth retrying on another host
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "no such host") ||
+		strings.Contains(errStr, "network unreachable") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "eof") ||
+		strings.Contains(errStr, "broken pipe")
 }
 
 // processJob handles a single job with retry logic
@@ -205,127 +225,203 @@ func (c *DistributedOllamaClient) processJob(client *OllamaClient, hostName stri
 	}
 }
 
-// SummarizeThread submits a summarization job to the worker pool
+// SummarizeThread submits a summarization job to the worker pool with retry logic
 func (c *DistributedOllamaClient) SummarizeThread(ctx context.Context, messages []*db.Message) (string, error) {
-	job := &OllamaJob{
-		ID:       fmt.Sprintf("summarize-%d", time.Now().UnixNano()),
-		Type:     "summarize",
-		Messages: messages,
-		Result:   make(chan OllamaResult, 1),
-		Context:  ctx,
-	}
+	var lastError error
 
-	// Submit to worker pool
-	select {
-	case c.jobs <- job:
-	case <-ctx.Done():
-		return "", ctx.Err()
-	}
-
-	// Wait for result
-	select {
-	case result := <-job.Result:
-		if result.Error != nil {
-			return "", result.Error
+	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		job := &OllamaJob{
+			ID:       fmt.Sprintf("summarize-%d", time.Now().UnixNano()),
+			Type:     "summarize",
+			Messages: messages,
+			Result:   make(chan OllamaResult, 1),
+			Context:  ctx,
 		}
-		log.Printf("Thread summarized by %s in %s", result.HostName, result.Duration)
-		return result.Text, nil
-	case <-ctx.Done():
-		return "", ctx.Err()
+
+		// Submit to worker pool
+		select {
+		case c.jobs <- job:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+
+		// Wait for result
+		select {
+		case result := <-job.Result:
+			if result.Error == nil {
+				log.Printf("Thread summarized by %s in %s", result.HostName, result.Duration)
+				return result.Text, nil
+			}
+
+			lastError = result.Error
+
+			// Check if error is retryable
+			if !isRetryableError(result.Error) {
+				// Non-retryable error (e.g., malformed input), fail immediately
+				return "", result.Error
+			}
+
+			// Retryable error - log and retry with another host
+			log.Printf("⚠ Host %s failed (attempt %d/%d): %v - retrying with another host",
+				result.HostName, attempt+1, c.maxRetries, result.Error)
+
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 	}
+
+	// All retries exhausted
+	return "", fmt.Errorf("all Ollama hosts failed after %d attempts: %w", c.maxRetries, lastError)
 }
 
-// ExtractTasks submits a task extraction job to the worker pool
+// ExtractTasks submits a task extraction job to the worker pool with retry logic
 func (c *DistributedOllamaClient) ExtractTasks(ctx context.Context, content, userEmail string) ([]*db.Task, error) {
-	job := &OllamaJob{
-		ID:        fmt.Sprintf("extract-%d", time.Now().UnixNano()),
-		Type:      "extract_tasks",
-		Prompt:    content,
-		UserEmail: userEmail,
-		Result:    make(chan OllamaResult, 1),
-		Context:   ctx,
-	}
+	var lastError error
 
-	// Submit to worker pool
-	select {
-	case c.jobs <- job:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-
-	// Wait for result
-	select {
-	case result := <-job.Result:
-		if result.Error != nil {
-			return nil, result.Error
+	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		job := &OllamaJob{
+			ID:        fmt.Sprintf("extract-%d", time.Now().UnixNano()),
+			Type:      "extract_tasks",
+			Prompt:    content,
+			UserEmail: userEmail,
+			Result:    make(chan OllamaResult, 1),
+			Context:   ctx,
 		}
-		log.Printf("Tasks extracted by %s in %s", result.HostName, result.Duration)
-		return result.Tasks, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+
+		// Submit to worker pool
+		select {
+		case c.jobs <- job:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+
+		// Wait for result
+		select {
+		case result := <-job.Result:
+			if result.Error == nil {
+				log.Printf("Tasks extracted by %s in %s", result.HostName, result.Duration)
+				return result.Tasks, nil
+			}
+
+			lastError = result.Error
+
+			// Check if error is retryable
+			if !isRetryableError(result.Error) {
+				// Non-retryable error, fail immediately
+				return nil, result.Error
+			}
+
+			// Retryable error - log and retry with another host
+			log.Printf("⚠ Host %s failed (attempt %d/%d): %v - retrying with another host",
+				result.HostName, attempt+1, c.maxRetries, result.Error)
+
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
+
+	// All retries exhausted
+	return nil, fmt.Errorf("all Ollama hosts failed after %d attempts: %w", c.maxRetries, lastError)
 }
 
-// EnrichTaskDescription submits a task enrichment job to the worker pool
+// EnrichTaskDescription submits a task enrichment job to the worker pool with retry logic
 func (c *DistributedOllamaClient) EnrichTaskDescription(ctx context.Context, prompt string) (string, error) {
-	job := &OllamaJob{
-		ID:      fmt.Sprintf("enrich-%d", time.Now().UnixNano()),
-		Type:    "enrich",
-		Prompt:  prompt,
-		Format:  "json",
-		Result:  make(chan OllamaResult, 1),
-		Context: ctx,
-	}
+	var lastError error
 
-	// Submit to worker pool
-	select {
-	case c.jobs <- job:
-	case <-ctx.Done():
-		return "", ctx.Err()
-	}
-
-	// Wait for result
-	select {
-	case result := <-job.Result:
-		if result.Error != nil {
-			return "", result.Error
+	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		job := &OllamaJob{
+			ID:      fmt.Sprintf("enrich-%d", time.Now().UnixNano()),
+			Type:    "enrich",
+			Prompt:  prompt,
+			Format:  "json",
+			Result:  make(chan OllamaResult, 1),
+			Context: ctx,
 		}
-		log.Printf("Task enriched by %s in %s", result.HostName, result.Duration)
-		return result.Text, nil
-	case <-ctx.Done():
-		return "", ctx.Err()
+
+		// Submit to worker pool
+		select {
+		case c.jobs <- job:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+
+		// Wait for result
+		select {
+		case result := <-job.Result:
+			if result.Error == nil {
+				log.Printf("Task enriched by %s in %s", result.HostName, result.Duration)
+				return result.Text, nil
+			}
+
+			lastError = result.Error
+
+			// Check if error is retryable
+			if !isRetryableError(result.Error) {
+				// Non-retryable error, fail immediately
+				return "", result.Error
+			}
+
+			// Retryable error - log and retry with another host
+			log.Printf("⚠ Host %s failed (attempt %d/%d): %v - retrying with another host",
+				result.HostName, attempt+1, c.maxRetries, result.Error)
+
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 	}
+
+	// All retries exhausted
+	return "", fmt.Errorf("all Ollama hosts failed after %d attempts: %w", c.maxRetries, lastError)
 }
 
-// EvaluateStrategicAlignment submits a strategic alignment job to the worker pool
+// EvaluateStrategicAlignment submits a strategic alignment job to the worker pool with retry logic
 func (c *DistributedOllamaClient) EvaluateStrategicAlignment(ctx context.Context, task *db.Task, priorities *config.Priorities) (*StrategicAlignmentResult, error) {
-	job := &OllamaJob{
-		ID:         fmt.Sprintf("strategic-%d", time.Now().UnixNano()),
-		Type:       "strategic",
-		Task:       task,
-		Priorities: priorities,
-		Result:     make(chan OllamaResult, 1),
-		Context:    ctx,
-	}
+	var lastError error
 
-	// Submit to worker pool
-	select {
-	case c.jobs <- job:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-
-	// Wait for result
-	select {
-	case result := <-job.Result:
-		if result.Error != nil {
-			return nil, result.Error
+	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		job := &OllamaJob{
+			ID:         fmt.Sprintf("strategic-%d", time.Now().UnixNano()),
+			Type:       "strategic",
+			Task:       task,
+			Priorities: priorities,
+			Result:     make(chan OllamaResult, 1),
+			Context:    ctx,
 		}
-		log.Printf("Strategic alignment evaluated by %s in %s", result.HostName, result.Duration)
-		return result.Strategic, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+
+		// Submit to worker pool
+		select {
+		case c.jobs <- job:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+
+		// Wait for result
+		select {
+		case result := <-job.Result:
+			if result.Error == nil {
+				log.Printf("Strategic alignment evaluated by %s in %s", result.HostName, result.Duration)
+				return result.Strategic, nil
+			}
+
+			lastError = result.Error
+
+			// Check if error is retryable
+			if !isRetryableError(result.Error) {
+				// Non-retryable error, fail immediately
+				return nil, result.Error
+			}
+
+			// Retryable error - log and retry with another host
+			log.Printf("⚠ Host %s failed (attempt %d/%d): %v - retrying with another host",
+				result.HostName, attempt+1, c.maxRetries, result.Error)
+
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
+
+	// All retries exhausted
+	return nil, fmt.Errorf("all Ollama hosts failed after %d attempts: %w", c.maxRetries, lastError)
 }
 
 // GetStats returns statistics for all hosts
