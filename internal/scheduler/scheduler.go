@@ -380,7 +380,7 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 		// Set source_id to thread ID so we can link tasks to threads
 		task.SourceID = threadID
 		normalizedTitle := ensureGmailTaskID(task, threadID, taskIndex)
-		purgeDuplicateGmailTasks(s.db, threadID, normalizedTitle, task.ID)
+		purgeDuplicateGmailTasks(s.db, threadID, normalizedTitle)
 
 		// Save task immediately after generating ID to claim ownership and prevent race conditions
 		// This fixes duplicate key violations in concurrent processing scenarios
@@ -608,7 +608,7 @@ func (s *Scheduler) ProcessNewMessages() {
 			// Set source_id to thread ID so we can link tasks to threads
 			task.SourceID = threadID
 			normalizedTitle := ensureGmailTaskID(task, threadID, taskIndex)
-			purgeDuplicateGmailTasks(s.db, threadID, normalizedTitle, task.ID)
+			purgeDuplicateGmailTasks(s.db, threadID, normalizedTitle)
 
 			// Save task immediately after generating ID to claim ownership and prevent race conditions
 			if err := s.db.SaveTask(task); err != nil {
@@ -943,7 +943,7 @@ func (s *Scheduler) ReprocessAITasks() error {
 			task.Source = "gmail"
 			task.SourceID = thread.ID
 			normalizedTitle := ensureGmailTaskID(task, thread.ID, taskIndex)
-			purgeDuplicateGmailTasks(s.db, thread.ID, normalizedTitle, task.ID)
+			purgeDuplicateGmailTasks(s.db, thread.ID, normalizedTitle)
 			if err := s.db.SaveTask(task); err != nil {
 				log.Printf("Failed to save task: %v", err)
 				continue
@@ -1096,8 +1096,8 @@ func normalizeTaskTitle(title string) string {
 	return strings.Join(strings.Fields(strings.ToLower(title)), " ")
 }
 
-func purgeDuplicateGmailTasks(database *db.DB, threadID, normalizedTitle, keepID string) {
-	if normalizedTitle == "" || keepID == "" {
+func purgeDuplicateGmailTasks(database *db.DB, threadID, normalizedTitle string) {
+	if normalizedTitle == "" {
 		return
 	}
 
@@ -1105,12 +1105,11 @@ func purgeDuplicateGmailTasks(database *db.DB, threadID, normalizedTitle, keepID
 		DELETE FROM tasks
 		WHERE source = 'gmail'
 		  AND source_id = ?
-		  AND id != ?
 		  AND status = 'pending'
 		  AND lower(trim(regexp_replace(title, '\\s+', ' ', 'g'))) = ?
 	`
 
-	if _, err := database.Exec(query, threadID, keepID, normalizedTitle); err != nil {
+	if _, err := database.Exec(query, threadID, normalizedTitle); err != nil {
 		log.Printf("Failed to purge duplicate tasks for thread %s: %v", threadID, err)
 	}
 }
