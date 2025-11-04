@@ -1,5 +1,15 @@
 # Claude Development Notes
 
+This file contains development conventions and coding standards for the Focus Agent project.
+
+## Quick Reference
+
+- **Operational Runbooks:** See `.agent/sop/deployment.md` for deployment procedures and task enrichment
+- **Database Documentation:** See `.agent/system/database.md` for schema, queries, and DuckDB notes
+- **Project Roadmap:** See `.agent/tasks/roadmap.md` for planned features
+- **Known Issues:** See `.agent/sop/issues.md` for current problems and blockers
+- **Agent Documentation:** See `.agent/README.md` for complete documentation index
+
 ## Development Workflow
 
 **Git Operations:**
@@ -18,77 +28,10 @@
 - Go module: `github.com/alexrabarts/focus-agent`
 - Binary: `focus-agent`
 - Config directory: `~/.focus-agent`
-- Database: **DuckDB (NOT SQLite)**
+- Database: **DuckDB (NOT SQLite)** - See `.agent/system/database.md` for details
   - Local dev: `~/.focus-agent/data.db`
   - Production: `/srv/focus-agent/data.duckdb`
-  - Currently using DuckDB v1.4.1 via `github.com/marcboeker/go-duckdb/v2`
-  - Upgraded from v1.1.3 to fix UPDATE constraint errors on indexed columns
   - **Important:** Use DuckDB CLI (`duckdb`) to query, NOT `sqlite3`
-
-## Operational Runbooks
-
-### Task Enrichment Backfill
-
-The `-enrich-tasks` flag enriches existing email-extracted tasks with AI-generated descriptions. This adds context from thread messages to tasks that have missing or short (< 50 chars) descriptions.
-
-**LLM Strategy (Priority Order):**
-1. **Ollama (Mistral 7B)** - Free, self-hosted on alex-mm:11434
-2. Claude CLI (Haiku) - Free (via Claude.ai account)
-3. Gemini 2.5 Flash - $0.20 per 1M tokens (paid fallback)
-
-**Configuration:**
-- Ollama URL: `http://alex-mm:11434`
-- Ollama Model: `mistral:latest` (7B parameters)
-- Rate limit: No limit (self-hosted)
-- Caching: 24 hours via LLM cache to reduce costs
-- Fallback: Automatic if Ollama is unreachable
-
-**When to run:**
-- After major email imports
-- When task descriptions are incomplete
-- On demand to improve task context
-
-**How to run:**
-```bash
-# 1. Stop API server (DuckDB doesn't support concurrent writes)
-sudo pkill -f "focus-agent.*-api"
-
-# 2. Run enrichment
-sudo -u alex /srv/focus-agent/focus-agent \
-  -config /srv/focus-agent/config.yaml \
-  -enrich-tasks
-
-# 3. Restart API server
-sudo -u alex /srv/focus-agent/focus-agent \
-  -config /srv/focus-agent/config.yaml \
-  -api > /tmp/focus-agent-api.log 2>&1 &
-```
-
-**What it does:**
-- Finds Gmail tasks with `status = 'pending'` and short/missing descriptions
-- Processes up to 100 tasks at a time
-- Shows cost estimate before processing
-- Displays progress every 10 tasks
-- Logs success/failure for each task
-
-**Output example:**
-```
-Finding email-extracted tasks that need enrichment...
-Found 42 tasks to enrich
-═══════════════════════════════════════════════════════
-🤖 TASK ENRICHMENT ESTIMATE:
-   Tasks to enrich: 42
-   Estimated tokens: ~29400 tokens
-   Estimated cost: ~$0.0059
-═══════════════════════════════════════════════════════
-Enriching task 1/42: Follow up on proposal
-✓ Enriched: Discussion with client about Q1 proposal...
-[...]
-Progress: 10/42 tasks | Elapsed: 2m15s | Avg: 13s/task | Est. remaining: 7m
-```
-
-**Last run:** October 26, 2025
-**Result:** 0 tasks needed enrichment (all tasks already have sufficient descriptions)
 
 ## Recent Changes
 
@@ -177,39 +120,10 @@ curl -X POST -H "Authorization: Bearer YOUR_AUTH_KEY" \
 
 ### Server Management
 
-**Restart LaunchAgent services:**
-```bash
-# Restart focus-agent
-launchctl unload ~/Library/LaunchAgents/com.rabarts.focus-agent.plist
-launchctl load ~/Library/LaunchAgents/com.rabarts.focus-agent.plist
-
-# Check status
-launchctl list | grep rabarts
-
-# View logs
-tail -f ~/.focus-agent/log/*.log
-```
-
-**Check API health:**
-```bash
-curl http://localhost:8081/health
-```
-
-**Full restart (both services):**
-```bash
-# Stop both
-launchctl unload ~/Library/LaunchAgents/com.rabarts.focus-agent.plist
-launchctl unload ~/Library/LaunchAgents/com.rabarts.focus-agent.ngrok.plist
-
-# Start both
-launchctl load ~/Library/LaunchAgents/com.rabarts.focus-agent.plist
-launchctl load ~/Library/LaunchAgents/com.rabarts.focus-agent.ngrok.plist
-
-# Verify
-launchctl list | grep rabarts
-curl http://localhost:8081/health
-curl https://noncondescendingly-anteroparietal-tyesha.ngrok-free.dev/health
-```
+See `.agent/sop/deployment.md` for complete deployment runbooks including:
+- LaunchAgent service management
+- Task enrichment procedures
+- Health check commands
 
 ### Architecture Notes
 
@@ -218,27 +132,7 @@ curl https://noncondescendingly-anteroparietal-tyesha.ngrok-free.dev/health
 - Allows API to trigger `ProcessNewMessages()` remotely
 - Avoids circular dependency with interface
 
-**Database Query:**
-```sql
-SELECT DISTINCT t.id, m.subject, m.from_addr, m.ts
-FROM threads t
-JOIN messages m ON t.id = m.thread_id
-WHERE t.summary IS NULL OR t.summary = ''
-GROUP BY t.id
-ORDER BY m.ts DESC
-LIMIT 100
-```
-
 **Token Estimation:**
 - Conservative estimate: 500 tokens per thread
 - Cost: $0.20 per 1M tokens (Gemini Flash free tier)
 - Shows before processing starts
-
-### Future Enhancements
-
-- [ ] Progress bar during processing
-- [ ] Real-time processing updates via WebSocket
-- [ ] Selective processing (checkbox selection)
-- [ ] Priority queue ordering
-- [ ] Retry failed threads
-- [ ] Processing history view
