@@ -382,25 +382,22 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 		normalizedTitle := ensureGmailTaskID(task, threadID, taskIndex)
 		purgeDuplicateGmailTasks(s.db, threadID, normalizedTitle)
 
-		// Save task immediately after generating ID to claim ownership and prevent race conditions
-		// This fixes duplicate key violations in concurrent processing scenarios
-		if err := s.db.SaveTask(task); err != nil {
-			log.Printf("Failed to save extracted task: %v", err)
-			continue
-		}
-
-		// Enrich task description with full context from email thread
-		// This happens AFTER saving to avoid race conditions during slow LLM calls
+		// Enrich task description with full context from email thread BEFORE saving
+		// This avoids calling SaveTask twice, which causes duplicate INSERTs in the WAL
+		// With mutex protection, we don't need to "claim ownership" early
 		if enrichedDesc, err := s.llm.EnrichTaskDescription(s.ctx, task, messages); err == nil {
 			task.Description = enrichedDesc
 			log.Printf("Enriched task description: %s -> %s", task.Title, enrichedDesc[:min(100, len(enrichedDesc))])
-			// Update the task with enriched description
-			if err := s.db.SaveTask(task); err != nil {
-				log.Printf("Failed to update task with enriched description: %v", err)
-			}
 		} else {
 			log.Printf("Failed to enrich task description: %v", err)
-			// Continue with original task that was already saved
+			// Continue with original task description
+		}
+
+		// Save task once with enriched description
+		// ON CONFLICT DO UPDATE handles cases where task already exists
+		if err := s.db.SaveTask(task); err != nil {
+			log.Printf("Failed to save extracted task: %v", err)
+			continue
 		}
 	}
 
@@ -610,23 +607,21 @@ func (s *Scheduler) ProcessNewMessages() {
 			normalizedTitle := ensureGmailTaskID(task, threadID, taskIndex)
 			purgeDuplicateGmailTasks(s.db, threadID, normalizedTitle)
 
-			// Save task immediately after generating ID to claim ownership and prevent race conditions
+			// Enrich task description with full context from email thread BEFORE saving
+			// This avoids calling SaveTask twice, which causes duplicate INSERTs in the WAL
+			// With mutex protection, we don't need to "claim ownership" early
+			if enrichedDesc, err := s.llm.EnrichTaskDescription(s.ctx, task, messages); err == nil {
+				task.Description = enrichedDesc
+			} else {
+				log.Printf("Failed to enrich task description: %v", err)
+				// Continue with original task description
+			}
+
+			// Save task once with enriched description
+			// ON CONFLICT DO UPDATE handles cases where task already exists
 			if err := s.db.SaveTask(task); err != nil {
 				log.Printf("Failed to save extracted task: %v", err)
 				continue
-			}
-
-			// Enrich task description with full context from email thread
-			// This happens AFTER saving to avoid race conditions during slow LLM calls
-			if enrichedDesc, err := s.llm.EnrichTaskDescription(s.ctx, task, messages); err == nil {
-				task.Description = enrichedDesc
-				// Update the task with enriched description
-				if err := s.db.SaveTask(task); err != nil {
-					log.Printf("Failed to update task with enriched description: %v", err)
-				}
-			} else {
-				log.Printf("Failed to enrich task description: %v", err)
-				// Continue with original task that was already saved
 			}
 
 			// Score task immediately after extraction (parallel scoring)
