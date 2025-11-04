@@ -380,7 +380,6 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 		// Set source_id to thread ID so we can link tasks to threads
 		task.SourceID = threadID
 		normalizedTitle := ensureGmailTaskID(task, threadID, taskIndex)
-		purgeDuplicateGmailTasks(s.db, threadID, normalizedTitle)
 
 		// Enrich task description with full context from email thread BEFORE saving
 		// This avoids calling SaveTask twice, which causes duplicate INSERTs in the WAL
@@ -393,9 +392,46 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 			// Continue with original task description
 		}
 
-		// Save task once with enriched description
-		// ON CONFLICT DO UPDATE handles cases where task already exists
-		if err := s.db.SaveTask(task); err != nil {
+		// Purge duplicates from this thread with same normalized title, then save
+		// Wrapped in transaction to ensure atomicity and avoid WAL replay issues
+		err := s.db.WithTx(func(tx *sql.Tx) error {
+			// Delete any existing tasks from this thread with same normalized title
+			purgeQuery := `
+				DELETE FROM tasks
+				WHERE source = 'gmail'
+				  AND source_id = ?
+				  AND status = 'pending'
+				  AND lower(trim(regexp_replace(title, '\\s+', ' ', 'g'))) = ?
+			`
+			if _, err := tx.Exec(purgeQuery, threadID, normalizedTitle); err != nil {
+				return fmt.Errorf("purge failed: %w", err)
+			}
+
+			// Insert the new task (ON CONFLICT should not be needed since we just deleted)
+			var dueTS *int64
+			if task.DueTS != nil {
+				ts := task.DueTS.Unix()
+				dueTS = &ts
+			}
+			createdTS := task.CreatedAt.Unix()
+			if task.CreatedAt.IsZero() {
+				createdTS = time.Now().Unix()
+			}
+			updatedTS := time.Now().Unix()
+
+			insertQuery := `
+				INSERT INTO tasks (id, source, source_id, title, description, due_ts, project, impact, urgency, effort, stakeholder, score, status, metadata, completed_at, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+			`
+			_, err := tx.Exec(insertQuery,
+				task.ID, task.Source, task.SourceID, task.Title, task.Description, dueTS,
+				task.Project, task.Impact, task.Urgency, task.Effort, task.Stakeholder,
+				task.Score, task.Status, task.Metadata, createdTS, updatedTS,
+			)
+			return err
+		})
+
+		if err != nil {
 			log.Printf("Failed to save extracted task: %v", err)
 			continue
 		}
@@ -605,7 +641,6 @@ func (s *Scheduler) ProcessNewMessages() {
 			// Set source_id to thread ID so we can link tasks to threads
 			task.SourceID = threadID
 			normalizedTitle := ensureGmailTaskID(task, threadID, taskIndex)
-			purgeDuplicateGmailTasks(s.db, threadID, normalizedTitle)
 
 			// Enrich task description with full context from email thread BEFORE saving
 			// This avoids calling SaveTask twice, which causes duplicate INSERTs in the WAL
@@ -617,9 +652,46 @@ func (s *Scheduler) ProcessNewMessages() {
 				// Continue with original task description
 			}
 
-			// Save task once with enriched description
-			// ON CONFLICT DO UPDATE handles cases where task already exists
-			if err := s.db.SaveTask(task); err != nil {
+			// Purge duplicates from this thread with same normalized title, then save
+			// Wrapped in transaction to ensure atomicity and avoid WAL replay issues
+			err := s.db.WithTx(func(tx *sql.Tx) error {
+				// Delete any existing tasks from this thread with same normalized title
+				purgeQuery := `
+					DELETE FROM tasks
+					WHERE source = 'gmail'
+					  AND source_id = ?
+					  AND status = 'pending'
+					  AND lower(trim(regexp_replace(title, '\\s+', ' ', 'g'))) = ?
+				`
+				if _, err := tx.Exec(purgeQuery, threadID, normalizedTitle); err != nil {
+					return fmt.Errorf("purge failed: %w", err)
+				}
+
+				// Insert the new task
+				var dueTS *int64
+				if task.DueTS != nil {
+					ts := task.DueTS.Unix()
+					dueTS = &ts
+				}
+				createdTS := task.CreatedAt.Unix()
+				if task.CreatedAt.IsZero() {
+					createdTS = time.Now().Unix()
+				}
+				updatedTS := time.Now().Unix()
+
+				insertQuery := `
+					INSERT INTO tasks (id, source, source_id, title, description, due_ts, project, impact, urgency, effort, stakeholder, score, status, metadata, completed_at, created_at, updated_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+				`
+				_, err := tx.Exec(insertQuery,
+					task.ID, task.Source, task.SourceID, task.Title, task.Description, dueTS,
+					task.Project, task.Impact, task.Urgency, task.Effort, task.Stakeholder,
+					task.Score, task.Status, task.Metadata, createdTS, updatedTS,
+				)
+				return err
+			})
+
+			if err != nil {
 				log.Printf("Failed to save extracted task: %v", err)
 				continue
 			}
