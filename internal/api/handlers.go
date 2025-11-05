@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -466,6 +467,32 @@ func (s *Server) handleQueueProcess(w http.ResponseWriter, r *http.Request) {
 	go s.scheduler.ProcessNewMessages()
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "processing started"})
+}
+
+// POST /api/tasks/reprocess - Trigger AI task reprocessing from existing thread summaries
+func (s *Server) handleTasksReprocess(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// Trigger reprocessing via scheduler
+	if s.scheduler == nil {
+		writeError(w, http.StatusServiceUnavailable, "Scheduler not available")
+		return
+	}
+
+	// Trigger reprocessing in background
+	go func() {
+		log.Println("API: Starting task reprocessing...")
+		if err := s.scheduler.ReprocessAITasks(); err != nil {
+			log.Printf("API: Task reprocessing failed: %v", err)
+		} else {
+			log.Println("API: Task reprocessing completed successfully")
+		}
+	}()
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "reprocessing started"})
 }
 
 // POST /api/brief - Send daily brief via Google Chat

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/alexrabarts/focus-agent/internal/config"
@@ -47,80 +48,95 @@ func (p *PromptBuilder) BuildThreadSummary(messages []*db.Message) string {
 }
 
 // BuildTaskExtraction creates a prompt for extracting tasks from received emails
+// UPDATED: Added noise reduction + enhanced date/stakeholder extraction
 func (p *PromptBuilder) BuildTaskExtraction(content string) string {
 	return fmt.Sprintf(`Extract action items from this content that I (%s) need to do or respond to.
 
-IMPORTANT RULES:
-- INCLUDE tasks where I am responsible or need to take action
-- INCLUDE implicit actions directed at me (e.g., "you should review", "recipient needs to", "please confirm")
-- INCLUDE invitations, meeting requests, and events I'm invited to
-- INCLUDE requests for my input, approval, or response
-- INCLUDE deadlines and due dates that affect me
-- INCLUDE tasks with no owner specified (assume they're for me)
-- SKIP only tasks explicitly assigned to other specific people (e.g., "Andrew: do X", "Maria: review Y")
+⚠️  CRITICAL: NOISE REDUCTION RULES (CHECK FIRST)
 
-For each task, provide:
-- title: Brief, actionable description (20-60 characters)
-- due_date: Deadline if mentioned (e.g., "tomorrow", "Friday", "Oct 30", "by EOD")
-- impact: Business impact score (1-5) - USE THE FULL RANGE, not everything is 3-4:
-  * 1 = Nice to have, minimal consequence if delayed
-    Examples: Review blog post draft, update internal wiki, familiarize with new tool
-  * 2 = Minor impact, can wait
-    Examples: Respond to low-priority question, update personal profile, organize files
-  * 3 = Moderate impact, affects team operations
-    Examples: Coordinate team meeting, review routine report, respond to colleague request
-  * 4 = Significant impact, affects business unit or clients
-    Examples: Resolve payment issue, prepare for client meeting, fix broken integration
-  * 5 = Critical impact, affects entire company or urgent escalation
-    Examples: Fix production outage, handle major client escalation, address security vulnerability
-- urgency: Time sensitivity score (1-5) - USE THE FULL RANGE based on actual deadlines:
-  * 1 = No deadline, background task
-    Examples: "When you get a chance", "No rush", long-term planning
-  * 2 = Can wait weeks (deadline 2-4 weeks away)
-    Examples: "By end of month", "Before Q1", future planning
-  * 3 = Needed within days (deadline this week or next)
-    Examples: "By Friday", "This week", "Next Tuesday"
-  * 4 = Needed very soon (deadline tomorrow or next day)
-    Examples: "By tomorrow", "ASAP", "By EOD Wednesday"
-  * 5 = Immediate action required (today, overdue, or blocking others)
-    Examples: "Today", "Urgent", "Blocking deployment", overdue items
-- effort: Estimated effort (S/M/L):
-  * S = < 1 hour, single action (reply, calendar action, quick decision)
-  * M = 1-4 hours, moderate complexity (document review, meeting prep, analysis)
-  * L = > 4 hours OR sustained learning (training, reading documentation, multi-session work, technical deep-dives)
-- stakeholder: ONLY use a person's actual name (e.g., "Sarah Chen", "Tim Davis"). DO NOT use: team names, department names (Finance, Marketing), company names (Acme Corp), generic roles (Customer Support), or phrases like "Relevant team member". If no specific person's name is mentioned, leave empty.
-- project: Related project, initiative, or context (if mentioned)
+1. AUTOMATED SENDERS - RETURN ZERO TASKS IF SENDER IS:
+   - noreply@, no-reply@, donotreply@, payments-noreply@
+   - notifications@, alerts@, support@, marketing@, newsletter@
+   - System emails: receipts, confirmations, password resets
+   → These are informational. Return empty list.
 
-IMPORTANT FILTERING:
-- SKIP meeting invitation tasks (e.g., "Respond to meeting invitation", "Accept meeting", "Confirm availability") - these belong in calendar, not task list
-- SKIP declined meeting invites UNLESS there's an explicit request to reschedule (e.g., "Can we find another time?" or "Please suggest alternatives") - simply declining is not a task
-- SKIP tasks where YOU are organizing events FOR OTHERS (e.g., "Arrange venue for lunch event", "Send invitations to employees", "Book catering for team") - these are event planning tasks for someone else's benefit
-- SKIP purely informational emails where no action is required (e.g., "FYI", "for your information", "just an update", "wanted to share", "keeping you in the loop", "no action needed")
-- SKIP emails where you're being informed about something but have no action to take
-- SKIP tasks that are requests TO others where you're waiting for them to deliver/provide something (e.g., "Alex is requesting materials from Jules", "asking John to prepare report") - these are tasks for THEM, not you
-- SKIP tasks where YOU are the recipient/beneficiary, not the actor (e.g., "Prepare space for Alex", "Send report to you", "Book room for Alex") - these describe someone ELSE's task. Look for patterns: "[verb] for Alex", "[verb] for you", "[verb] to you"
-- SKIP marketing/promotional emails (e.g., product announcements, sales pitches, "explore our solution", newsletters, webinar invites, "learn more about", "discover how") - these are not actionable work tasks
-- SKIP social invitations and team celebration announcements (e.g., "Join us celebrating John's birthday", "Happy hour on Friday", "Team lunch", "Contribute to birthday board", "Sign the card for Maria") - these are optional social events, not work tasks
-- SKIP decorative or aesthetic announcements (e.g., "Check out the new office decorations", "Enjoy the Halloween display", "See the new artwork in lobby") - no business action required
-- SKIP "nice to have" optional activities with no business impact (e.g., "Feel free to stop by", "You're welcome to attend", "Optional: join us for") - these lack clear deliverable or deadline
-- SKIP purely congratulatory or thank-you messages (e.g., "Thanks for your hard work", "Congratulations on the launch", "Great job team") - appreciation with no follow-up action
+2. LIMIT TO 1-2 TASKS MAXIMUM:
+   - One email = at most 1-2 tasks (consolidate duplicates)
+   - Payment notification = 1 task ("Resolve payment issue"), NOT 13 variations
+   - NO timestamp titles (e.g., "Oct 2, 12:00 PM - ...")
+   - NO meta-observations (e.g., "No clear requests identified")
 
-Examples of NON-tasks to SKIP:
-- "Enjoy the new office decorations in Building 2"
-- "Join us in celebrating Sarah's promotion this Friday"
-- "Check out the Halloween decorations in the lobby"
-- "Thanks for your contributions to the Q3 launch"
-- "Contribute to Mark's birthday Kudoboard"
-- "You're invited to the optional coffee chat"
+3. DELEGATION CHECK:
+   - If I'm asking someone else to do something → Don't extract as MY task
+   - Delegation phrases: "Can you...", "Please [name]..."
+   - Exception: "Follow up with [person]" = MY task
+
+INCLUDE tasks where I'm responsible:
+- Requests directed at me ("you should review", "please confirm")
+- Invitations requiring response
+- Requests for input, approval, or response
+- Deadlines affecting me
+- Tasks with no owner (assume mine)
+
+SKIP (these are 70%% of historical noise):
+- Meeting invitations ("Accept meeting", "Confirm availability")
+- Event planning for others ("Arrange venue", "Send invitations")
+- Purely informational ("FYI", "for your information", "no action needed")
+- Marketing emails (product announcements, sales pitches, newsletters, webinars)
+- Social invitations ("Join us celebrating", "Team lunch", "Birthday board")
+- Decorations ("Enjoy Halloween decorations", "Check out new artwork")
+- Congratulatory messages ("Thanks!", "Great job!")
+
+For each task:
+
+- title: Action verb + object (20-60 chars) - NOT timestamp, NOT meta-comment
+
+- due_date: Extract ANY temporal reference:
+  * Explicit dates: "Oct 30", "12/15", "2025-01-15", "January 15th"
+  * Relative dates: "tomorrow", "in 2 days", "next Monday", "end of week"
+  * Deadline phrases: "by Friday", "before EOD", "by end of day"
+  * Event-relative: "before the meeting", "after launch"
+  * Urgency signals: "URGENT" → "today", "ASAP" → "within 24 hours"
+  * Format as natural language (e.g., "Friday", "Oct 30", "tomorrow")
+  * If NO temporal reference, use "N/A"
+
+- impact: (1-5) - **USE FULL RANGE**
+  * 1 = Nice to have (blog draft, organize files)
+  * 2 = Minor (low-priority question)
+  * 3 = Moderate, affects team (meeting coordination)
+  * 4 = Significant, affects business (payment issue, client work)
+  * 5 = Critical, company-wide (outage, security, executive escalation)
+
+- urgency: (1-5) - **CALIBRATE TO REAL DEADLINES**
+  * 1 = No deadline ("when you can")
+  * 2 = Weeks away
+  * 3 = This/next week
+  * 4 = Tomorrow/next day
+  * 5 = Today/overdue/blocking
+
+- effort: S (< 1h), M (1-4h), L (> 4h)
+
+- stakeholder: Person's name ONLY (extract from From header, email body, signatures)
+  * FIRST: Check From header
+  * SECOND: Look for @mentions, "Sarah asked", "Tim needs"
+  * THIRD: Parse signatures for full names
+  * Extract FULL NAME: "Sarah Chen" not "Sarah"
+  * Normalize emails: "s.chen@company.com" → "Sarah Chen"
+  * ONLY use N/A if no person identifiable
+  * VALID: "Sarah Chen", "Tim Davis"
+  * INVALID: "Finance Team", "Customer Support", "Marketing"
+
+- project: Related context (if mentioned)
 
 Content:
 %s
 
-Return ONLY tasks found in the content above. Format as a numbered list with pipe-delimited fields.
-Each line should follow this exact format:
-1. Title: [Task description] | Due: [Deadline] | Impact: [1-5] | Urgency: [1-5] | Effort: [S/M/L] | Stakeholder: [Name or empty] | Project: [Context]
+Format (pipe-delimited):
+1. Title: [Action] | Due: [Deadline] | Impact: [1-5] | Urgency: [1-5] | Effort: [S/M/L] | Stakeholder: [Name] | Project: [Context]
 
-YOUR EXTRACTED TASKS FROM THE CONTENT:`, p.userEmail, content)
+If no actionable tasks, return empty list.
+
+YOUR EXTRACTED TASKS:`, p.userEmail, content)
 }
 
 // BuildSentEmailTaskExtraction creates a prompt for extracting self-commitments from sent emails
@@ -162,23 +178,190 @@ Format as a numbered list. Example:
 Extract my commitments:`, recipientList, p.userEmail, recipientList, content)
 }
 
+// BuildTaskExtractionWithMetadata creates thread-aware extraction with automated sender filtering
+func (p *PromptBuilder) BuildTaskExtractionWithMetadata(messages []*db.Message) string {
+	if len(messages) == 0 {
+		return "No messages provided. Return empty list."
+	}
+
+	// Detect automated senders from most recent message
+	lastMsg := messages[len(messages)-1]
+	fromAddr := strings.ToLower(lastMsg.From)
+
+	// Automated sender patterns that should NOT generate tasks
+	automatedSenders := []string{
+		"noreply@", "no-reply@", "donotreply@", "do-not-reply@",
+		"notifications@", "notify@", "alerts@",
+		"payments-noreply@", "receipts@", "billing@",
+		"support@", "help@", "customercare@",
+		"marketing@", "newsletter@", "news@",
+		"automated@", "auto@", "system@",
+	}
+
+	isAutomatedSender := false
+	for _, pattern := range automatedSenders {
+		if strings.Contains(fromAddr, pattern) {
+			isAutomatedSender = true
+			break
+		}
+	}
+
+	// If automated sender, skip task extraction
+	if isAutomatedSender {
+		log.Printf("Skipping automated sender: %s", lastMsg.From)
+		return "This is an automated system notification. Do not extract any tasks. Return empty list."
+	}
+
+	var prompt strings.Builder
+
+	prompt.WriteString(fmt.Sprintf("Extract action items for %s from this email thread.\n\n", p.userEmail))
+
+	// Add thread context
+	prompt.WriteString("=== EMAIL THREAD ===\n")
+	prompt.WriteString(fmt.Sprintf("Thread contains %d message(s)\n\n", len(messages)))
+
+	for i, msg := range messages {
+		prompt.WriteString(fmt.Sprintf("[Message %d - %s]\n", i+1, msg.Timestamp.Format("Jan 2, 3:04 PM")))
+		prompt.WriteString(fmt.Sprintf("From: %s\n", msg.From))
+		prompt.WriteString(fmt.Sprintf("To: %s\n", msg.To))
+		prompt.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
+
+		content := msg.Snippet
+		if content == "" {
+			content = msg.Body
+		}
+		if len(content) > 500 {
+			content = content[:500] + "..."
+		}
+		prompt.WriteString(fmt.Sprintf("Content: %s\n\n", content))
+	}
+
+	prompt.WriteString("\n=== CRITICAL NOISE REDUCTION RULES (CHECK FIRST) ===\n\n")
+
+	prompt.WriteString("1. THREAD CONSOLIDATION (HIGHEST PRIORITY):\n")
+	if len(messages) > 1 {
+		prompt.WriteString(fmt.Sprintf("   ⚠️  This thread has %d messages\n", len(messages)))
+		prompt.WriteString("   - Extract at MOST 1-2 SUMMARY tasks for the ENTIRE thread\n")
+		prompt.WriteString("   - DO NOT create one task per message\n")
+		prompt.WriteString("   - DO NOT use timestamps as task titles\n")
+		prompt.WriteString("   - BAD: '1. Oct 2, 12:00 PM - Chris says...', '2. Oct 3, 2:15 PM - Alex responds...'\n")
+		prompt.WriteString("   - GOOD: '1. Title: Prepare NDA for client review | Due: Thursday | ...'\n")
+		prompt.WriteString("   - Look at the FINAL outcome of the conversation, not every message\n\n")
+	}
+
+	prompt.WriteString("2. DELEGATION DETECTION:\n")
+	prompt.WriteString(fmt.Sprintf("   - If %s is the sender (From: field), check if delegating TO others\n", p.userEmail))
+	prompt.WriteString("   - Delegation phrases: 'Can you...', 'Please [name]...', '[Person]: do X'\n")
+	prompt.WriteString("   - If Alex asks 'Georgie, can you finalize the report?' → That's Georgie's task, not Alex's\n")
+	prompt.WriteString("   - SKIP tasks where Alex is delegating work to someone else\n")
+	prompt.WriteString("   - INCLUDE tasks where someone is asking Alex to do something\n")
+	prompt.WriteString("   - Exception: 'Follow up with [person]' IS a task for Alex\n\n")
+
+	prompt.WriteString("3. DUPLICATE PREVENTION:\n")
+	prompt.WriteString("   - If same action mentioned multiple times, extract it ONCE\n")
+	prompt.WriteString("   - Example: 'Cross-reference NPS data' appears 4 times → 1 task total\n")
+	prompt.WriteString("   - Consolidate variations: 'Update payment', 'Fix billing', 'Review card' → 1 task: 'Resolve payment issue'\n\n")
+
+	prompt.WriteString("4. META-OBSERVATIONS (DO NOT EXTRACT AS TASKS):\n")
+	prompt.WriteString("   - NEVER create tasks like:\n")
+	prompt.WriteString("     * 'No clear requests identified'\n")
+	prompt.WriteString("     * 'Thread requires further review'\n")
+	prompt.WriteString("     * 'Action items unclear'\n")
+	prompt.WriteString("   - If no actionable tasks exist, return empty list\n\n")
+
+	prompt.WriteString("5. FYI vs ACTIONABLE:\n")
+	prompt.WriteString("   - SKIP: 'FYI', 'for your information', 'keeping you in the loop', 'no action needed'\n")
+	prompt.WriteString("   - SKIP: Social invitations ('Join us celebrating', 'Happy hour Friday')\n")
+	prompt.WriteString("   - SKIP: Decorations ('Enjoy Halloween decorations', 'Check out new artwork')\n")
+	prompt.WriteString("   - SKIP: Thank-yous ('Great job!', 'Thanks for your work')\n")
+	prompt.WriteString("   - SKIP: Meeting invitations ('Accept meeting', 'Confirm availability')\n\n")
+
+	prompt.WriteString("\n=== TASK FORMAT REQUIREMENTS ===\n\n")
+
+	prompt.WriteString("For each VALID, UNIQUE task:\n\n")
+
+	prompt.WriteString("- title: Action verb + object (20-60 characters)\n")
+	prompt.WriteString("  * MUST be an action: 'Review X', 'Prepare Y', 'Respond to Z'\n")
+	prompt.WriteString("  * NOT a timestamp: ❌ 'Oct 2, 12:00 PM - Chris needs...'\n")
+	prompt.WriteString("  * NOT a meta-comment: ❌ 'No clear requests identified'\n")
+	prompt.WriteString("  * GOOD: ✅ 'Review Q4 budget variance report'\n\n")
+
+	prompt.WriteString("- due_date: Extract ANY temporal reference from the email:\n")
+	prompt.WriteString("  * Explicit dates: 'Oct 30', '12/15', '2025-01-15', 'January 15th'\n")
+	prompt.WriteString("  * Relative dates: 'tomorrow', 'in 2 days', 'next Monday', 'end of week'\n")
+	prompt.WriteString("  * Deadline phrases: 'by Friday', 'before EOD', 'by end of day'\n")
+	prompt.WriteString("  * Event-relative: 'before the meeting', 'after launch'\n")
+	prompt.WriteString("  * Urgency signals: 'URGENT' → 'today', 'ASAP' → 'within 24 hours'\n")
+	prompt.WriteString("  * Format as natural language (e.g., 'Friday', 'Oct 30', 'tomorrow')\n")
+	prompt.WriteString("  * If NO temporal reference, leave as 'N/A'\n\n")
+
+	prompt.WriteString("- impact: Business impact (1-5) - **FORCE YOURSELF TO USE FULL RANGE**\n")
+	prompt.WriteString("  * 1 = Nice to have, minimal consequence (e.g., 'Review blog draft', 'Update profile')\n")
+	prompt.WriteString("  * 2 = Minor impact, affects only you (e.g., 'Organize files', 'Read team update')\n")
+	prompt.WriteString("  * 3 = Moderate impact, affects team (e.g., 'Review pull request', 'Update project status')\n")
+	prompt.WriteString("  * 4 = Significant impact, affects business/revenue (e.g., 'Fix billing issue', 'Client meeting')\n")
+	prompt.WriteString("  * 5 = Critical, company-wide (e.g., 'Fix production outage', 'Security incident')\n")
+	prompt.WriteString("  * Payment notifications = impact 2 (informational), NOT 5\n\n")
+
+	prompt.WriteString("- urgency: Time sensitivity (1-5) - **CALIBRATE AGAINST REAL DEADLINES**\n")
+	prompt.WriteString("  * 1 = No deadline ('when you have time', 'no rush')\n")
+	prompt.WriteString("  * 2 = Weeks away (deadline 2-4 weeks out)\n")
+	prompt.WriteString("  * 3 = This week or next ('by Friday', 'next Tuesday')\n")
+	prompt.WriteString("  * 4 = Tomorrow or next day ('by EOD Wednesday', subject line with '!')\n")
+	prompt.WriteString("  * 5 = Today, overdue, blocking ('URGENT', 'ASAP', '!!!', 'blocking deployment')\n")
+	prompt.WriteString("  * Detect urgency signals in subject line and email body\n\n")
+
+	prompt.WriteString("- effort: Estimated time\n")
+	prompt.WriteString("  * S = < 1 hour (email reply, quick decision, calendar action)\n")
+	prompt.WriteString("  * M = 1-4 hours (doc review, meeting prep, analysis)\n")
+	prompt.WriteString("  * L = > 4 hours (training, technical deep-dive, multi-session work)\n\n")
+
+	prompt.WriteString("- stakeholder: Extract the person who needs this done:\n")
+	prompt.WriteString("  * FIRST: Check From header - who sent the email?\n")
+	prompt.WriteString("  * SECOND: Look for names in email body (@mentions, 'Sarah asked', 'Tim needs')\n")
+	prompt.WriteString("  * THIRD: Parse email signatures for full names\n")
+	prompt.WriteString("  * FOURTH: Check To/CC headers for context\n")
+	prompt.WriteString("  * Extract FULL NAME when possible (e.g., 'Sarah Chen' not 'Sarah')\n")
+	prompt.WriteString("  * Normalize email addresses (e.g., 's.chen@company.com' → 'Sarah Chen')\n")
+	prompt.WriteString("  * ONLY use 'N/A' if no person identifiable\n")
+	prompt.WriteString("  * VALID: 'Sarah Chen', 'Tim Davis'\n")
+	prompt.WriteString("  * INVALID: 'Finance Team', 'Customer Support', 'Marketing'\n\n")
+
+	prompt.WriteString("- project: Related project/initiative (if mentioned)\n\n")
+
+	prompt.WriteString("\n=== OUTPUT FORMAT ===\n")
+	prompt.WriteString("Numbered list with pipe-delimited fields:\n")
+	prompt.WriteString("1. Title: [Action] | Due: [Deadline] | Impact: [1-5] | Urgency: [1-5] | Effort: [S/M/L] | Stakeholder: [Name] | Project: [Context]\n\n")
+
+	prompt.WriteString("If no actionable tasks, return empty list.\n\n")
+
+	prompt.WriteString("YOUR EXTRACTED TASKS:\n")
+
+	return prompt.String()
+}
+
 // BuildTaskEnrichment creates a prompt for enriching task descriptions with full email context
-// ENHANCED: Now includes a quoted snippet from the original email
+// UPDATED: PRESERVE + ADD approach, 400-600 chars, enhanced date/stakeholder extraction
 func (p *PromptBuilder) BuildTaskEnrichment(task *db.Task, messages []*db.Message) string {
 	var prompt strings.Builder
 
-	prompt.WriteString("You are helping enrich a task description with full context from an email thread.\n\n")
+	prompt.WriteString("You are enriching a task description by ADDING context from the email thread.\n")
+	prompt.WriteString("IMPORTANT: Do NOT summarize or replace the existing description. ADD new details to it.\n\n")
 
 	prompt.WriteString("TASK TO ENRICH:\n")
 	prompt.WriteString(fmt.Sprintf("Title: %s\n", task.Title))
 	if task.Description != "" {
 		prompt.WriteString(fmt.Sprintf("Current Description: %s\n", task.Description))
+		prompt.WriteString("(PRESERVE this and add more details below)\n")
 	}
 	if task.DueTS != nil {
 		prompt.WriteString(fmt.Sprintf("Due Date: %s\n", task.DueTS.Format("Jan 2, 2006")))
 	}
 	if task.Project != "" {
 		prompt.WriteString(fmt.Sprintf("Project: %s\n", task.Project))
+	}
+	if task.Stakeholder != "" {
+		prompt.WriteString(fmt.Sprintf("Stakeholder: %s\n", task.Stakeholder))
 	}
 	prompt.WriteString("\n")
 
@@ -191,6 +374,7 @@ func (p *PromptBuilder) BuildTaskEnrichment(task *db.Task, messages []*db.Messag
 	for i := len(messages) - 1; i >= start; i-- {
 		msg := messages[i]
 		prompt.WriteString(fmt.Sprintf("\n--- Message from %s (%s) ---\n", msg.From, msg.Timestamp.Format("Jan 2, 3:04 PM")))
+		prompt.WriteString(fmt.Sprintf("To: %s\n", msg.To))
 		prompt.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
 		// Use snippet if available, otherwise truncate body
 		if msg.Snippet != "" && msg.Snippet != msg.Body {
@@ -206,24 +390,31 @@ func (p *PromptBuilder) BuildTaskEnrichment(task *db.Task, messages []*db.Messag
 	prompt.WriteString("\n")
 
 	prompt.WriteString("INSTRUCTIONS:\n")
-	prompt.WriteString("Write a rich, contextual description (2-4 sentences) that captures:\n\n")
+	prompt.WriteString("Write an enriched description (400-600 characters) that ADDS the following details:\n\n")
+
 	prompt.WriteString("1. WHAT is being asked for and WHY it matters\n")
 	prompt.WriteString("   - The specific deliverable or action needed\n")
 	prompt.WriteString("   - The business context or problem it addresses\n")
 	prompt.WriteString("   - Why this is important right now\n\n")
 
 	prompt.WriteString("2. WHO is involved and their role\n")
-	prompt.WriteString("   - Who requested this (name and role if mentioned)\n")
-	prompt.WriteString("   - Who else is involved or affected\n")
-	prompt.WriteString("   - Any stakeholder concerns or expectations\n\n")
+	prompt.WriteString("   - Extract requester name from 'From:' header (use FULL NAME from signature if available)\n")
+	prompt.WriteString("   - Parse email address to name if needed (e.g., s.chen@company.com → Sarah Chen)\n")
+	prompt.WriteString("   - Look for names mentioned in email body\n")
+	prompt.WriteString("   - Check To/CC headers for other stakeholders\n")
+	prompt.WriteString("   - Include role/title if mentioned (e.g., 'Sarah Chen (VP Finance)')\n\n")
 
 	prompt.WriteString("3. WHEN and timeline context\n")
-	prompt.WriteString("   - Specific deadline if mentioned\n")
-	prompt.WriteString("   - Reason for the timeline (e.g., 'for board meeting', 'before launch')\n")
-	prompt.WriteString("   - Any time-sensitivity or urgency drivers\n\n")
+	prompt.WriteString("   - Extract ANY date/time reference from the emails:\n")
+	prompt.WriteString("     * Explicit dates: 'Oct 30', '12/15/2024', 'January 15th'\n")
+	prompt.WriteString("     * Relative dates: 'tomorrow', 'next Friday', 'end of week', 'in 2 days'\n")
+	prompt.WriteString("     * Deadline phrases: 'by EOD', 'before the meeting', 'no later than'\n")
+	prompt.WriteString("     * Event-relative: 'before board meeting', 'after launch'\n")
+	prompt.WriteString("   - Explain the reason for the timeline (e.g., 'for board meeting on Oct 30')\n")
+	prompt.WriteString("   - Note any urgency signals: 'URGENT', 'ASAP', '!!!' in subject\n\n")
 
 	prompt.WriteString("4. HOW this connects to broader work\n")
-	prompt.WriteString("   - Related projects or initiatives\n")
+	prompt.WriteString("   - Related projects or initiatives mentioned\n")
 	prompt.WriteString("   - Dependencies or prerequisites\n")
 	prompt.WriteString("   - Expected outcomes or success criteria\n\n")
 
@@ -234,20 +425,16 @@ func (p *PromptBuilder) BuildTaskEnrichment(task *db.Task, messages []*db.Messag
 	prompt.WriteString("   - Keep the quote under 150 characters\n\n")
 
 	prompt.WriteString("STYLE GUIDELINES:\n")
+	prompt.WriteString("- Target length: 400-600 characters (NOT sentences - characters)\n")
+	prompt.WriteString("- If current description exists, START with it, then add: 'Additional context: ...'\n")
+	prompt.WriteString("- If current description is missing/short, write a complete new description\n")
 	prompt.WriteString("- Write in clear, professional language\n")
 	prompt.WriteString("- Be specific with names, dates, numbers, and concrete details\n")
 	prompt.WriteString("- Focus on actionable context that helps prioritize and execute\n")
 	prompt.WriteString("- Avoid speculation - only include information from the thread\n")
-	prompt.WriteString("- Keep main description concise: 2-4 sentences\n")
 	prompt.WriteString("- Add the email snippet at the end on a new line\n\n")
 
-	prompt.WriteString("EXAMPLE OUTPUT:\n")
-	prompt.WriteString(`"Sarah Chen (VP Finance) requested a detailed review of Q3 budget variances by Friday EOB for the board meeting. She's particularly concerned about the 12% overspend in APAC marketing and needs specific recommendations on cost optimization opportunities to present to the board. This connects to our Q4 profitability targets and may affect the marketing automation project timeline.
-
-Original request: \"Hi Alex, we need the Q3 budget variance analysis by Friday EOB for the board meeting. Focus on APAC marketing overspend.\"`)
-	prompt.WriteString("\n\n")
-
-	prompt.WriteString("Now write the enriched description (2-4 sentences + email snippet, no preamble):\n")
+	prompt.WriteString("Now write the enriched description (400-600 characters + email snippet, no preamble):\n")
 
 	return prompt.String()
 }
@@ -394,50 +581,9 @@ func (p *PromptBuilder) BuildMeetingPrep(event *db.Event, docs []*db.Document) s
 	return prompt.String()
 }
 
-// BuildTaskExtractionWithConversationFlow creates an advanced prompt for Claude that considers conversation flow
-// This is the smarter version that was previously only in hybrid.go
+// BuildTaskExtractionWithConversationFlow creates an advanced prompt with conversation awareness
+// UPDATED: Now delegates to BuildTaskExtractionWithMetadata for consistency and noise reduction
 func (p *PromptBuilder) BuildTaskExtractionWithConversationFlow(messages []*db.Message) string {
-	var prompt strings.Builder
-
-	prompt.WriteString(fmt.Sprintf("Extract action items for %s from this email conversation.\n\n", p.userEmail))
-
-	prompt.WriteString("CONVERSATION FLOW:\n")
-	for i, msg := range messages {
-		prompt.WriteString(fmt.Sprintf("\n[Message %d - %s]\n", i+1, msg.Timestamp.Format("Jan 2, 3:04 PM")))
-		prompt.WriteString(fmt.Sprintf("From: %s\n", msg.From))
-		prompt.WriteString(fmt.Sprintf("To: %s\n", msg.To))
-		prompt.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
-
-		content := msg.Snippet
-		if content == "" || content == msg.Body {
-			content = msg.Body
-		}
-		if len(content) > 500 {
-			content = content[:500] + "..."
-		}
-		prompt.WriteString(fmt.Sprintf("Content: %s\n", content))
-	}
-
-	prompt.WriteString("\n\nEXTRACTION RULES:\n")
-	prompt.WriteString(fmt.Sprintf("- Extract tasks for %s (the recipient/participant)\n", p.userEmail))
-	prompt.WriteString("- Include requests, commitments, follow-ups, and action items\n")
-	prompt.WriteString("- Consider conversation flow - later messages may cancel or modify earlier requests\n")
-	prompt.WriteString("- Skip tasks that were already completed in the thread\n")
-	prompt.WriteString("- Skip vague or unclear items\n")
-	prompt.WriteString("- Skip meeting invitations (calendar items)\n")
-	prompt.WriteString("- Skip purely informational emails with no action required\n\n")
-
-	prompt.WriteString("OUTPUT FORMAT (pipe-delimited):\n")
-	prompt.WriteString("For each task, provide a single line with pipe-separated fields:\n")
-	prompt.WriteString("1. Title: Brief, actionable description (20-60 characters) | Due: [Deadline] | Impact: [1-5] | Urgency: [1-5] | Effort: [S/M/L] | Stakeholder: [Person name or empty] | Project: [Context]\n\n")
-	prompt.WriteString("Impact scale (1-5): 1=minimal, 2=minor, 3=moderate, 4=significant, 5=critical\n")
-	prompt.WriteString("Urgency scale (1-5): 1=no deadline, 2=weeks away, 3=this week, 4=tomorrow, 5=today/overdue\n")
-	prompt.WriteString("Effort: S=<1 hour, M=1-4 hours, L=>4 hours\n\n")
-
-	prompt.WriteString("Example output:\n")
-	prompt.WriteString("1. Title: Review Q4 forecast model | Due: Friday EOD | Impact: 4 | Urgency: 4 | Effort: M | Stakeholder: Sarah Chen | Project: Board presentation\n\n")
-
-	prompt.WriteString("Extract tasks now (one per line, pipe-delimited):")
-
-	return prompt.String()
+	// Delegate to metadata-aware extraction for noise reduction + data extraction
+	return p.BuildTaskExtractionWithMetadata(messages)
 }

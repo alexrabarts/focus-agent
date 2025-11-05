@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -230,6 +231,19 @@ func (c *DistributedOllamaClient) SummarizeThread(ctx context.Context, messages 
 	var lastError error
 
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		// Apply exponential backoff before retry (skip on first attempt)
+		if attempt > 0 {
+			backoffDelay := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+			log.Printf("💤 Exponential backoff: waiting %s before retry %d/%d", backoffDelay, attempt+1, c.maxRetries)
+
+			select {
+			case <-time.After(backoffDelay):
+				// Continue to retry
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+
 		job := &OllamaJob{
 			ID:       fmt.Sprintf("summarize-%d", time.Now().UnixNano()),
 			Type:     "summarize",
@@ -279,6 +293,19 @@ func (c *DistributedOllamaClient) ExtractTasks(ctx context.Context, content, use
 	var lastError error
 
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		// Apply exponential backoff before retry (skip on first attempt)
+		if attempt > 0 {
+			backoffDelay := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+			log.Printf("💤 Exponential backoff: waiting %s before retry %d/%d", backoffDelay, attempt+1, c.maxRetries)
+
+			select {
+			case <-time.After(backoffDelay):
+				// Continue to retry
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+
 		job := &OllamaJob{
 			ID:        fmt.Sprintf("extract-%d", time.Now().UnixNano()),
 			Type:      "extract_tasks",
@@ -329,6 +356,19 @@ func (c *DistributedOllamaClient) EnrichTaskDescription(ctx context.Context, pro
 	var lastError error
 
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		// Apply exponential backoff before retry (skip on first attempt)
+		if attempt > 0 {
+			backoffDelay := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+			log.Printf("💤 Exponential backoff: waiting %s before retry %d/%d", backoffDelay, attempt+1, c.maxRetries)
+
+			select {
+			case <-time.After(backoffDelay):
+				// Continue to retry
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+
 		job := &OllamaJob{
 			ID:      fmt.Sprintf("enrich-%d", time.Now().UnixNano()),
 			Type:    "enrich",
@@ -379,6 +419,19 @@ func (c *DistributedOllamaClient) EvaluateStrategicAlignment(ctx context.Context
 	var lastError error
 
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		// Apply exponential backoff before retry (skip on first attempt)
+		if attempt > 0 {
+			backoffDelay := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+			log.Printf("💤 Exponential backoff: waiting %s before retry %d/%d", backoffDelay, attempt+1, c.maxRetries)
+
+			select {
+			case <-time.After(backoffDelay):
+				// Continue to retry
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+
 		job := &OllamaJob{
 			ID:         fmt.Sprintf("strategic-%d", time.Now().UnixNano()),
 			Type:       "strategic",

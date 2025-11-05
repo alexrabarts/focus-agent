@@ -1021,7 +1021,7 @@ func (g *GeminiClient) parseTaskField(task *db.Task, field string) {
 	}
 }
 
-// parseDueDate parses due date strings like "Today", "Tomorrow", "Friday", etc.
+// parseDueDate parses due date strings with enhanced pattern matching (15+ patterns)
 func parseDueDate(dueStr string) *time.Time {
 	dueStr = strings.ToLower(strings.TrimSpace(dueStr))
 
@@ -1031,23 +1031,88 @@ func parseDueDate(dueStr string) *time.Time {
 
 	now := time.Now()
 
-	if dueStr == "today" {
+	// Exact keyword matches
+	switch dueStr {
+	case "today":
 		due := now.Add(8 * time.Hour)
 		return &due
-	} else if dueStr == "tomorrow" {
+	case "tomorrow":
 		due := now.Add(24 * time.Hour)
 		return &due
-	} else if dueStr == "this week" || dueStr == "week" {
+	case "this week", "week":
 		due := now.Add(72 * time.Hour)
+		return &due
+	case "next week":
+		due := now.Add(7 * 24 * time.Hour)
+		return &due
+	case "end of week", "eow":
+		// Find next Friday
+		daysUntilFriday := (5 - int(now.Weekday()) + 7) % 7
+		if daysUntilFriday == 0 {
+			daysUntilFriday = 7
+		}
+		due := now.Add(time.Duration(daysUntilFriday) * 24 * time.Hour)
+		return &due
+	case "end of month", "eom":
+		// Last day of current month
+		year, month, _ := now.Date()
+		due := time.Date(year, month+1, 0, 23, 59, 59, 0, now.Location())
 		return &due
 	}
 
-	// Try to parse weekday names (e.g., "Friday")
+	// Remove common prefix words to normalize
+	dueStr = strings.TrimPrefix(dueStr, "by ")
+	dueStr = strings.TrimPrefix(dueStr, "before ")
+	dueStr = strings.TrimPrefix(dueStr, "no later than ")
+	dueStr = strings.TrimPrefix(dueStr, "due ")
+	dueStr = strings.TrimSpace(dueStr)
+
+	// Handle "eod" or "end of day" → treat as today 5pm
+	if dueStr == "eod" || dueStr == "end of day" {
+		due := time.Date(now.Year(), now.Month(), now.Day(), 17, 0, 0, 0, now.Location())
+		return &due
+	}
+
+	// Handle "in X days" patterns
+	if strings.HasPrefix(dueStr, "in ") {
+		parts := strings.Fields(dueStr)
+		if len(parts) >= 3 && parts[2] == "days" {
+			if days, err := strconv.Atoi(parts[1]); err == nil {
+				due := now.Add(time.Duration(days) * 24 * time.Hour)
+				return &due
+			}
+		}
+		if len(parts) >= 3 && (parts[2] == "weeks" || parts[2] == "week") {
+			if weeks, err := strconv.Atoi(parts[1]); err == nil {
+				due := now.Add(time.Duration(weeks*7) * 24 * time.Hour)
+				return &due
+			}
+		}
+	}
+
+	// Handle "next Monday", "next Friday" patterns
+	if strings.HasPrefix(dueStr, "next ") {
+		weekdayStr := strings.TrimPrefix(dueStr, "next ")
+		weekdays := map[string]int{
+			"sunday": 0, "monday": 1, "tuesday": 2, "wednesday": 3,
+			"thursday": 4, "friday": 5, "saturday": 6,
+		}
+		if weekdayNum, ok := weekdays[weekdayStr]; ok {
+			currentWeekday := int(now.Weekday())
+			daysUntil := (weekdayNum - currentWeekday + 7) % 7
+			if daysUntil == 0 {
+				daysUntil = 7 // Force next week
+			}
+			due := now.Add(time.Duration(daysUntil) * 24 * time.Hour)
+			return &due
+		}
+	}
+
+	// Try weekday names (this Friday = this week's Friday)
 	weekdays := map[string]int{
 		"sunday": 0, "monday": 1, "tuesday": 2, "wednesday": 3,
 		"thursday": 4, "friday": 5, "saturday": 6,
 	}
-
 	if weekdayNum, ok := weekdays[dueStr]; ok {
 		currentWeekday := int(now.Weekday())
 		daysUntil := (weekdayNum - currentWeekday + 7) % 7
@@ -1058,6 +1123,60 @@ func parseDueDate(dueStr string) *time.Time {
 		return &due
 	}
 
+	// Try parsing specific date formats
+	// Format: "Oct 30", "October 30", "Jan 15"
+	monthNames := map[string]int{
+		"jan": 1, "january": 1, "feb": 2, "february": 2,
+		"mar": 3, "march": 3, "apr": 4, "april": 4,
+		"may": 5, "jun": 6, "june": 6,
+		"jul": 7, "july": 7, "aug": 8, "august": 8,
+		"sep": 9, "september": 9, "oct": 10, "october": 10,
+		"nov": 11, "november": 11, "dec": 12, "december": 12,
+	}
+
+	parts := strings.Fields(dueStr)
+	if len(parts) == 2 {
+		monthStr := strings.ToLower(parts[0])
+		if month, ok := monthNames[monthStr]; ok {
+			dayStr := strings.TrimSuffix(parts[1], "th")
+			dayStr = strings.TrimSuffix(dayStr, "st")
+			dayStr = strings.TrimSuffix(dayStr, "nd")
+			dayStr = strings.TrimSuffix(dayStr, "rd")
+			if day, err := strconv.Atoi(dayStr); err == nil && day >= 1 && day <= 31 {
+				year := now.Year()
+				// If month has passed this year, use next year
+				if month < int(now.Month()) || (month == int(now.Month()) && day < now.Day()) {
+					year++
+				}
+				due := time.Date(year, time.Month(month), day, 23, 59, 59, 0, now.Location())
+				return &due
+			}
+		}
+	}
+
+	// Try standard date formats: "2025-01-15", "01/15/2025", "15/01/2025"
+	formats := []string{
+		"2006-01-02",
+		"01/02/2006",
+		"1/2/2006",
+		"01/02",
+		"1/2",
+	}
+	for _, format := range formats {
+		if parsed, err := time.Parse(format, dueStr); err == nil {
+			// For formats without year, use current year or next year
+			if !strings.Contains(format, "2006") {
+				year := now.Year()
+				if parsed.Month() < now.Month() || (parsed.Month() == now.Month() && parsed.Day() < now.Day()) {
+					year++
+				}
+				parsed = time.Date(year, parsed.Month(), parsed.Day(), 23, 59, 59, 0, now.Location())
+			}
+			return &parsed
+		}
+	}
+
+	// If nothing matched, return nil
 	return nil
 }
 

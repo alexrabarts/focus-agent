@@ -19,6 +19,7 @@ import (
 // Scheduler interface to avoid circular dependency
 type Scheduler interface {
 	ProcessNewMessages()
+	ReprocessAITasks() error
 }
 
 type Server struct {
@@ -52,6 +53,7 @@ func (s *Server) Start(port int) error {
 	// Register routes
 	mux.HandleFunc("/api/tasks", s.authMiddleware(s.handleTasks))
 	mux.HandleFunc("/api/tasks/", s.authMiddleware(s.handleTaskAction))
+	mux.HandleFunc("/api/tasks/reprocess", s.authMiddleware(s.handleTasksReprocess))
 	mux.HandleFunc("/api/priorities", s.authMiddleware(s.handlePriorities))
 	mux.HandleFunc("/api/priorities/undo", s.authMiddleware(s.handlePrioritiesUndo))
 	mux.HandleFunc("/api/stats", s.authMiddleware(s.handleStats))
