@@ -90,14 +90,14 @@ type QueueItemResponse struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// GET /api/tasks - List pending tasks
+// GET /api/tasks - List all tasks (including completed)
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
-	tasks, err := s.database.GetPendingTasks(50)
+	tasks, err := s.database.GetAllTasks(100)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

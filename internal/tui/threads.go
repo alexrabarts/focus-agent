@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -9,11 +12,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/alexrabarts/focus-agent/internal/db"
+	"github.com/alexrabarts/focus-agent/internal/front"
 )
 
 type ThreadsModel struct {
 	database       *db.DB
 	apiClient      *APIClient
+	front          *front.Client
 	threads        []*db.Thread
 	messages       map[string][]*db.Message // thread ID -> messages
 	cursor         int
@@ -31,10 +36,11 @@ type threadsLoadedMsg struct {
 	err     error
 }
 
-func NewThreadsModel(database *db.DB, apiClient *APIClient) ThreadsModel {
+func NewThreadsModel(database *db.DB, apiClient *APIClient, frontClient *front.Client) ThreadsModel {
 	return ThreadsModel{
 		database:  database,
 		apiClient: apiClient,
+		front:     frontClient,
 		messages:  make(map[string][]*db.Message),
 		loading:   true,
 		viewport:  viewport.New(80, 20),
@@ -91,6 +97,27 @@ func (m ThreadsModel) Update(msg tea.Msg) (ThreadsModel, tea.Cmd) {
 				}
 			case "down", "j":
 				m.detailScroll++
+			case "o":
+				// Open in Front (if Front metadata exists)
+				if m.database != nil {
+					if frontMetadata, err := m.database.GetFrontMetadata(m.selectedThread.ID); err == nil {
+						frontURL := fmt.Sprintf("https://app.frontapp.com/open/%s", frontMetadata.ConversationID)
+						// Use xdg-open on Linux, open on macOS
+						openBrowser(frontURL)
+					}
+				}
+			case "a":
+				// Archive conversation in Front
+				if m.front != nil && m.database != nil {
+					if frontMetadata, err := m.database.GetFrontMetadata(m.selectedThread.ID); err == nil {
+						ctx := context.Background()
+						if err := m.front.Archive(ctx, frontMetadata.ConversationID); err == nil {
+							// Update local status
+							frontMetadata.Status = "archived"
+							m.database.SaveFrontMetadata(frontMetadata)
+						}
+					}
+				}
 			}
 			return m, nil
 		}
@@ -326,7 +353,40 @@ func (m ThreadsModel) renderThreadDetail() string {
 	// Gmail link
 	gmailURL := fmt.Sprintf("https://mail.google.com/mail/u/0/#inbox/%s", m.selectedThread.ID)
 	hyperlink := makeHyperlink(gmailURL, "🔗 View in Gmail")
-	b.WriteString(fmt.Sprintf("  \x1b[38;5;39m\x1b[4m%s\x1b[0m\n\n", hyperlink))
+	b.WriteString(fmt.Sprintf("  \x1b[38;5;39m\x1b[4m%s\x1b[0m\n", hyperlink))
+
+	// Front metadata if available
+	var frontMetadata *db.FrontMetadata
+	var frontComments []*db.FrontComment
+	if m.database != nil {
+		frontMetadata, _ = m.database.GetFrontMetadata(m.selectedThread.ID)
+		frontComments, _ = m.database.GetFrontComments(m.selectedThread.ID)
+	} else if m.apiClient != nil {
+		// TODO: Add API endpoints to fetch Front data
+	}
+
+	if frontMetadata != nil {
+		frontStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("141")).
+			Padding(0, 1)
+
+		b.WriteString("\n")
+		b.WriteString(frontStyle.Render(fmt.Sprintf("📋 Front: %s", frontMetadata.Status)))
+		if frontMetadata.AssigneeName != "" {
+			b.WriteString(frontStyle.Render(fmt.Sprintf(" | Assignee: %s", frontMetadata.AssigneeName)))
+		}
+		if len(frontMetadata.Tags) > 0 {
+			b.WriteString(frontStyle.Render(fmt.Sprintf(" | Tags: %s", strings.Join(frontMetadata.Tags, ", "))))
+		}
+
+		// Front link
+		frontURL := fmt.Sprintf("https://app.frontapp.com/open/%s", frontMetadata.ConversationID)
+		frontLink := makeHyperlink(frontURL, "🔗 Open in Front")
+		b.WriteString(fmt.Sprintf("\n  \x1b[38;5;141m\x1b[4m%s\x1b[0m", frontLink))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
 
 	// AI Summary section
 	summaryTitleStyle := lipgloss.NewStyle().
@@ -398,13 +458,77 @@ func (m ThreadsModel) renderThreadDetail() string {
 		b.WriteString(scrollStyle.Render(scrollInfo) + "\n")
 	}
 
+	// Front comments section
+	if len(frontComments) > 0 {
+		commentsTitleStyle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("141")).
+			Padding(0, 1)
+
+		b.WriteString("\n")
+		b.WriteString(commentsTitleStyle.Render(fmt.Sprintf("💬 Internal Comments (%d):", len(frontComments))) + "\n\n")
+
+		for _, comment := range frontComments {
+			commentHeaderStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("141")).
+				Padding(0, 2)
+
+			commentBodyStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("250")).
+				Padding(0, 3)
+
+			b.WriteString(commentHeaderStyle.Render(fmt.Sprintf("%s | %s",
+				comment.AuthorName, comment.CreatedAt.Format("Jan 2, 15:04"))) + "\n")
+
+			body := comment.Body
+			if len(body) > 200 {
+				body = body[:197] + "..."
+			}
+			b.WriteString(commentBodyStyle.Render(body) + "\n\n")
+		}
+	}
+
 	// Help text
 	helpStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		Padding(1, 0, 0, 1)
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("↑/↓: scroll messages | esc/q: back to list"))
+	helpText := "↑/↓: scroll | esc/q: back"
+	if frontMetadata != nil {
+		helpText += " | o: open in Front | a: archive"
+	}
+	b.WriteString(helpStyle.Render(helpText))
 
 	return b.String()
+}
+
+// openBrowser opens a URL in the default browser
+func openBrowser(url string) error {
+	var cmd string
+	var args []string
+
+	// Detect platform
+	switch {
+	case fileExists("/usr/bin/xdg-open"):
+		cmd = "xdg-open"
+		args = []string{url}
+	case fileExists("/usr/bin/open"):
+		cmd = "open"
+		args = []string{url}
+	default:
+		return fmt.Errorf("cannot detect browser opener")
+	}
+
+	// Execute in background
+	go func() {
+		_ = exec.Command(cmd, args...).Start()
+	}()
+
+	return nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

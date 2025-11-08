@@ -92,7 +92,7 @@ func (t *TasksClient) syncTaskList(ctx context.Context, database *db.DB, taskLis
 	call := t.Service.Tasks.List(taskList.Id).
 		Context(ctx).
 		MaxResults(100).
-		ShowCompleted(false).
+		ShowCompleted(true).
 		ShowDeleted(false)
 
 	// Use updated min if available for incremental sync

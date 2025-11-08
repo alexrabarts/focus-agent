@@ -14,6 +14,7 @@ import (
 	"github.com/alexrabarts/focus-agent/internal/api"
 	"github.com/alexrabarts/focus-agent/internal/config"
 	"github.com/alexrabarts/focus-agent/internal/db"
+	"github.com/alexrabarts/focus-agent/internal/front"
 	"github.com/alexrabarts/focus-agent/internal/google"
 	"github.com/alexrabarts/focus-agent/internal/llm"
 	"github.com/alexrabarts/focus-agent/internal/planner"
@@ -72,7 +73,7 @@ func main() {
 	// Handle TUI remote mode early - doesn't need database or other services
 	if *tuiMode && cfg.Remote.URL != "" {
 		log.Println("Starting TUI in remote mode...")
-		if err := tui.Start(nil, nil, nil, nil, cfg); err != nil {
+		if err := tui.Start(nil, nil, nil, nil, nil, cfg); err != nil {
 			log.Fatalf("TUI error: %v", err)
 		}
 		os.Exit(0)
@@ -112,6 +113,17 @@ func main() {
 	// Initialize planner
 	plannerService := planner.New(database, googleClients, llmClient, cfg)
 
+	// Initialize Front client (conditional)
+	var frontClient *front.Client
+	log.Printf("Front config: Enabled=%v, APIToken length=%d, InboxID=%s",
+		cfg.Front.Enabled, len(cfg.Front.APIToken), cfg.Front.InboxID)
+	if cfg.Front.Enabled {
+		frontClient = front.NewClient(cfg.Front.APIToken)
+		log.Println("Front client initialized")
+	} else {
+		log.Println("Front integration disabled in config")
+	}
+
 	// Handle brief-only mode
 	if *briefOnly {
 		if err := plannerService.GenerateDailyBrief(ctx); err != nil {
@@ -124,7 +136,7 @@ func main() {
 	// Handle process-only mode
 	if *processOnly {
 		log.Println("Processing threads with AI...")
-		sched := scheduler.New(database, googleClients, llmClient, plannerService, cfg)
+		sched := scheduler.New(database, googleClients, llmClient, plannerService, frontClient, cfg)
 		sched.ProcessNewMessages()
 		log.Println("Processing complete!")
 		os.Exit(0)
@@ -133,7 +145,7 @@ func main() {
 	// Handle reprocess-tasks mode
 	if *reprocessTasks {
 		log.Println("Re-extracting tasks from existing thread summaries...")
-		sched := scheduler.New(database, googleClients, llmClient, plannerService, cfg)
+		sched := scheduler.New(database, googleClients, llmClient, plannerService, frontClient, cfg)
 		if err := sched.ReprocessAITasks(); err != nil {
 			log.Fatalf("Failed to reprocess tasks: %v", err)
 		}
@@ -143,7 +155,7 @@ func main() {
 	// Handle enrich-tasks mode
 	if *enrichTasks {
 		log.Println("Enriching descriptions for existing email-extracted tasks...")
-		sched := scheduler.New(database, googleClients, llmClient, plannerService, cfg)
+		sched := scheduler.New(database, googleClients, llmClient, plannerService, frontClient, cfg)
 		if err := sched.EnrichExistingTasks(); err != nil {
 			log.Fatalf("Failed to enrich tasks: %v", err)
 		}
@@ -153,7 +165,7 @@ func main() {
 	// Handle cleanup-other-tasks mode
 	if *cleanupOthers {
 		log.Println("Cleaning up tasks assigned to other people...")
-		sched := scheduler.New(database, googleClients, llmClient, plannerService, cfg)
+		sched := scheduler.New(database, googleClients, llmClient, plannerService, frontClient, cfg)
 		if err := sched.CleanupOtherPeoplesTasks(); err != nil {
 			log.Fatalf("Failed to cleanup tasks: %v", err)
 		}
@@ -230,14 +242,14 @@ func main() {
 	// Handle TUI mode (local mode only - remote mode handled earlier)
 	if *tuiMode {
 		log.Println("Starting TUI in local mode...")
-		if err := tui.Start(database, googleClients, llmClient, plannerService, cfg); err != nil {
+		if err := tui.Start(database, googleClients, llmClient, plannerService, frontClient, cfg); err != nil {
 			log.Fatalf("TUI error: %v", err)
 		}
 		os.Exit(0)
 	}
 
 	// Initialize scheduler first
-	sched := scheduler.New(database, googleClients, llmClient, plannerService, cfg)
+	sched := scheduler.New(database, googleClients, llmClient, plannerService, frontClient, cfg)
 
 	// Handle API mode or if API is enabled in config
 	if *apiMode || cfg.API.Enabled {

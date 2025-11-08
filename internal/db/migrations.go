@@ -247,6 +247,163 @@ func GetMigrations() []Migration {
 				return err
 			},
 		},
+		{
+			Version: 6,
+			Name:    "add_front_integration",
+			Up: func(tx *sql.Tx) error {
+				// Check if front_metadata table exists
+				var count int
+				err := tx.QueryRow(`
+					SELECT COUNT(*)
+					FROM information_schema.tables
+					WHERE table_name='front_metadata'
+				`).Scan(&count)
+				if err != nil {
+					return fmt.Errorf("failed to check front_metadata table: %w", err)
+				}
+
+				// Create front_metadata table if it doesn't exist
+				if count == 0 {
+					_, err = tx.Exec(`
+						CREATE TABLE front_metadata (
+							thread_id VARCHAR PRIMARY KEY,
+							conversation_id VARCHAR NOT NULL,
+							status VARCHAR,
+							assignee_id VARCHAR,
+							assignee_name VARCHAR,
+							tags TEXT,
+							last_message_ts BIGINT,
+							created_at BIGINT NOT NULL,
+							updated_at BIGINT NOT NULL,
+							FOREIGN KEY (thread_id) REFERENCES threads(id)
+						);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create front_metadata table: %w", err)
+					}
+
+					// Create indexes
+					_, err = tx.Exec(`
+						CREATE INDEX IF NOT EXISTS idx_front_thread_id ON front_metadata(thread_id);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create front_thread_id index: %w", err)
+					}
+
+					_, err = tx.Exec(`
+						CREATE INDEX IF NOT EXISTS idx_front_conversation_id ON front_metadata(conversation_id);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create front_conversation_id index: %w", err)
+					}
+
+					_, err = tx.Exec(`
+						CREATE INDEX IF NOT EXISTS idx_front_status ON front_metadata(status);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create front_status index: %w", err)
+					}
+
+					_, err = tx.Exec(`
+						CREATE INDEX IF NOT EXISTS idx_front_updated ON front_metadata(updated_at);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create front_updated index: %w", err)
+					}
+				}
+
+				// Check if front_comments table exists
+				err = tx.QueryRow(`
+					SELECT COUNT(*)
+					FROM information_schema.tables
+					WHERE table_name='front_comments'
+				`).Scan(&count)
+				if err != nil {
+					return fmt.Errorf("failed to check front_comments table: %w", err)
+				}
+
+				// Create front_comments table if it doesn't exist
+				if count == 0 {
+					_, err = tx.Exec(`
+						CREATE TABLE front_comments (
+							id VARCHAR PRIMARY KEY,
+							thread_id VARCHAR NOT NULL,
+							conversation_id VARCHAR NOT NULL,
+							author_name VARCHAR,
+							body TEXT NOT NULL,
+							created_at BIGINT NOT NULL,
+							FOREIGN KEY (thread_id) REFERENCES threads(id)
+						);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create front_comments table: %w", err)
+					}
+
+					// Create indexes
+					_, err = tx.Exec(`
+						CREATE INDEX IF NOT EXISTS idx_front_comments_thread ON front_comments(thread_id);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create front_comments_thread index: %w", err)
+					}
+
+					_, err = tx.Exec(`
+						CREATE INDEX IF NOT EXISTS idx_front_comments_conversation ON front_comments(conversation_id);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create front_comments_conversation index: %w", err)
+					}
+
+					_, err = tx.Exec(`
+						CREATE INDEX IF NOT EXISTS idx_front_comments_created ON front_comments(created_at);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create front_comments_created index: %w", err)
+					}
+				}
+
+				return nil
+			},
+			Down: func(tx *sql.Tx) error {
+				// Drop indexes
+				_, err := tx.Exec(`DROP INDEX IF EXISTS idx_front_comments_created`)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`DROP INDEX IF EXISTS idx_front_comments_conversation`)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`DROP INDEX IF EXISTS idx_front_comments_thread`)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`DROP INDEX IF EXISTS idx_front_updated`)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`DROP INDEX IF EXISTS idx_front_status`)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`DROP INDEX IF EXISTS idx_front_conversation_id`)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`DROP INDEX IF EXISTS idx_front_thread_id`)
+				if err != nil {
+					return err
+				}
+
+				// Drop tables
+				_, err = tx.Exec(`DROP TABLE IF EXISTS front_comments`)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`DROP TABLE IF EXISTS front_metadata`)
+				return err
+			},
+		},
 		// Add future migrations here
 	}
 }

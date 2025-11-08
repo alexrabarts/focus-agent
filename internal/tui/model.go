@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/alexrabarts/focus-agent/internal/config"
 	"github.com/alexrabarts/focus-agent/internal/db"
+	"github.com/alexrabarts/focus-agent/internal/front"
 	"github.com/alexrabarts/focus-agent/internal/google"
 	"github.com/alexrabarts/focus-agent/internal/llm"
 	"github.com/alexrabarts/focus-agent/internal/planner"
@@ -59,6 +60,7 @@ type Model struct {
 	clients   *google.Clients
 	llm       llm.Client
 	planner   *planner.Planner
+	front     *front.Client
 	config    *config.Config
 	apiClient *APIClient
 
@@ -74,7 +76,7 @@ type Model struct {
 	logBuffer       *LogBuffer
 }
 
-func NewModel(database *db.DB, clients *google.Clients, llmClient llm.Client, plannerService *planner.Planner, cfg *config.Config, logBuffer *LogBuffer) Model {
+func NewModel(database *db.DB, clients *google.Clients, llmClient llm.Client, plannerService *planner.Planner, frontClient *front.Client, cfg *config.Config, logBuffer *LogBuffer) Model {
 	// Initialize API client if remote mode is configured
 	var apiClient *APIClient
 	var sched *scheduler.Scheduler
@@ -83,7 +85,7 @@ func NewModel(database *db.DB, clients *google.Clients, llmClient llm.Client, pl
 		apiClient = NewAPIClient(cfg)
 	} else {
 		// For local mode, create a scheduler for processing
-		sched = scheduler.New(database, clients, llmClient, plannerService, cfg)
+		sched = scheduler.New(database, clients, llmClient, plannerService, frontClient, cfg)
 	}
 
 	return Model{
@@ -92,13 +94,14 @@ func NewModel(database *db.DB, clients *google.Clients, llmClient llm.Client, pl
 		clients:         clients,
 		llm:             llmClient,
 		planner:         plannerService,
+		front:           frontClient,
 		config:          cfg,
 		apiClient:       apiClient,
 		tasksModel:      NewTasksModel(database, plannerService, apiClient),
 		prioritiesModel: NewPrioritiesModel(cfg, plannerService, apiClient),
 		queueModel:      NewQueueModel(database, apiClient, sched, cfg),
 		statsModel:      NewStatsModel(database, apiClient),
-		threadsModel:    NewThreadsModel(database, apiClient),
+		threadsModel:    NewThreadsModel(database, apiClient, frontClient),
 		lastRefreshTime: time.Now(),
 		logBuffer:       logBuffer,
 	}
@@ -365,7 +368,7 @@ func (m Model) formatLastRefresh() string {
 	}
 }
 
-func Start(database *db.DB, clients *google.Clients, llmClient llm.Client, plannerService *planner.Planner, cfg *config.Config) error {
+func Start(database *db.DB, clients *google.Clients, llmClient llm.Client, plannerService *planner.Planner, frontClient *front.Client, cfg *config.Config) error {
 	// Validate remote mode configuration
 	if cfg.Remote.URL != "" && cfg.Remote.AuthKey == "" {
 		return fmt.Errorf("remote mode is configured (url=%s) but auth_key is missing\n\nPlease set FOCUS_AGENT_AUTH_KEY environment variable in ~/.env and restart your shell", cfg.Remote.URL)
@@ -390,7 +393,7 @@ func Start(database *db.DB, clients *google.Clients, llmClient llm.Client, plann
 		}()
 	}
 
-	m := NewModel(database, clients, llmClient, plannerService, cfg, logBuffer)
+	m := NewModel(database, clients, llmClient, plannerService, frontClient, cfg, logBuffer)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

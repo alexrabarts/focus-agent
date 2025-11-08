@@ -26,7 +26,7 @@ type Client interface {
 	SummarizeThread(ctx context.Context, messages []*db.Message) (string, error)
 	SummarizeThreadWithModelSelection(ctx context.Context, messages []*db.Message, metadata ThreadMetadata) (string, error)
 	ExtractTasks(ctx context.Context, content string) ([]*db.Task, error)
-	ExtractTasksFromMessages(ctx context.Context, content string, messages []*db.Message) ([]*db.Task, error)
+	ExtractTasksFromMessages(ctx context.Context, content string, messages []*db.Message, frontComments []*db.FrontComment, frontMetadata *db.FrontMetadata) ([]*db.Task, error)
 	EnrichTaskDescription(ctx context.Context, task *db.Task, messages []*db.Message) (string, error)
 	EvaluateStrategicAlignment(ctx context.Context, task *db.Task, priorities *config.Priorities) (*StrategicAlignmentResult, error)
 	DraftReply(ctx context.Context, thread []*db.Message, goal string) (string, error)
@@ -408,11 +408,11 @@ func (g *GeminiClient) SummarizeThreadWithModelSelection(ctx context.Context, me
 
 // ExtractTasks extracts action items from content
 func (g *GeminiClient) ExtractTasks(ctx context.Context, content string) ([]*db.Task, error) {
-	return g.ExtractTasksFromMessages(ctx, content, nil)
+	return g.ExtractTasksFromMessages(ctx, content, nil, nil, nil)
 }
 
-// ExtractTasksFromMessages extracts action items from content with message context
-func (g *GeminiClient) ExtractTasksFromMessages(ctx context.Context, content string, messages []*db.Message) ([]*db.Task, error) {
+// ExtractTasksFromMessages extracts action items from content with message context + Front data
+func (g *GeminiClient) ExtractTasksFromMessages(ctx context.Context, content string, messages []*db.Message, frontComments []*db.FrontComment, frontMetadata *db.FrontMetadata) ([]*db.Task, error) {
 	// Determine if this is a sent email thread
 	isSentEmail := false
 	var recipients []string

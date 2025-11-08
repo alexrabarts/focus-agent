@@ -21,6 +21,7 @@ type Config struct {
 	Planner    Planner    `yaml:"planner"`
 	Limits     Limits     `yaml:"limits"`
 	Priorities Priorities `yaml:"priorities"`
+	Front      Front      `yaml:"front"`
 }
 
 type Database struct {
@@ -56,9 +57,10 @@ type Gemini struct {
 }
 
 type OllamaHost struct {
-	URL     string `yaml:"url"`     // e.g., "http://alex-mm:11434"
-	Workers int    `yaml:"workers"` // Number of concurrent workers for this host
-	Name    string `yaml:"name"`    // Display name (e.g., "alex-mm")
+	URL      string `yaml:"url"`      // e.g., "http://alex-mm:11434"
+	Workers  int    `yaml:"workers"`  // Number of concurrent workers for this host
+	Name     string `yaml:"name"`     // Display name (e.g., "alex-mm")
+	Priority int    `yaml:"priority"` // Priority (1 = highest, 99 = fallback only). Default: 1
 }
 
 type Ollama struct {
@@ -140,6 +142,17 @@ type Priorities struct {
 
 	// Key projects
 	KeyProjects []string `yaml:"key_projects"`
+}
+
+type Front struct {
+	Enabled              bool   `yaml:"enabled"`
+	APIToken             string `yaml:"api_token"`
+	InboxID              string `yaml:"inbox_id"`
+	EnrichOnSync         bool   `yaml:"enrich_on_sync"`
+	MaxRequestsPerMinute int    `yaml:"max_requests_per_minute"`
+	MaxEnrichPerRun      int    `yaml:"max_enrich_per_run"`
+	SkipArchived         bool   `yaml:"skip_archived"`
+	DefaultSnoozeHours   int    `yaml:"default_snooze_hours"`
 }
 
 func Load(path string) (*Config, error) {
@@ -363,6 +376,25 @@ func applyDefaults(cfg *Config) {
 	if cfg.Limits.MaxTaskLists == 0 {
 		cfg.Limits.MaxTaskLists = 10
 	}
+
+	// Front defaults
+	if cfg.Front.MaxRequestsPerMinute == 0 {
+		cfg.Front.MaxRequestsPerMinute = 90 // Conservative limit (Front allows 100/min)
+	}
+	if cfg.Front.MaxEnrichPerRun == 0 {
+		cfg.Front.MaxEnrichPerRun = 50
+	}
+	if cfg.Front.DefaultSnoozeHours == 0 {
+		cfg.Front.DefaultSnoozeHours = 24
+	}
+	// EnrichOnSync defaults to true if Front is enabled
+	if cfg.Front.Enabled && !cfg.Front.EnrichOnSync {
+		cfg.Front.EnrichOnSync = true
+	}
+	// SkipArchived defaults to true if Front is enabled
+	if cfg.Front.Enabled && !cfg.Front.SkipArchived {
+		cfg.Front.SkipArchived = true
+	}
 }
 
 func validate(cfg *Config) error {
@@ -378,6 +410,17 @@ func validate(cfg *Config) error {
 	if cfg.Chat.WebhookURL == "" {
 		return fmt.Errorf("chat.webhook_url is required")
 	}
+
+	// Front validation (only if enabled)
+	if cfg.Front.Enabled {
+		if cfg.Front.APIToken == "" {
+			return fmt.Errorf("front.api_token is required when Front is enabled")
+		}
+		if cfg.Front.InboxID == "" {
+			return fmt.Errorf("front.inbox_id is required when Front is enabled")
+		}
+	}
+
 	return nil
 }
 

@@ -144,6 +144,29 @@ type Priority struct {
 	Notes     string     `json:"notes"`      // Optional notes about this priority
 }
 
+// FrontMetadata represents Front conversation metadata
+type FrontMetadata struct {
+	ThreadID       string    `json:"thread_id"`
+	ConversationID string    `json:"conversation_id"`
+	Status         string    `json:"status"`
+	AssigneeID     string    `json:"assignee_id"`
+	AssigneeName   string    `json:"assignee_name"`
+	Tags           []string  `json:"tags"`
+	LastMessageTS  time.Time `json:"last_message_ts"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// FrontComment represents an internal comment in Front
+type FrontComment struct {
+	ID             string    `json:"id"`
+	ThreadID       string    `json:"thread_id"`
+	ConversationID string    `json:"conversation_id"`
+	AuthorName     string    `json:"author_name"`
+	Body           string    `json:"body"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
 // SaveMessage inserts or updates a message
 func (db *DB) SaveMessage(msg *Message) error {
 	labelsJSON, _ := json.Marshal(msg.Labels)
@@ -255,6 +278,63 @@ func (db *DB) GetPendingTasks(limit int) ([]*Task, error) {
 		FROM tasks
 		WHERE status = 'pending'
 		ORDER BY score DESC
+		LIMIT ?
+	`
+
+	rows, err := db.Query(query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []*Task
+	for rows.Next() {
+		task := &Task{}
+		var dueTS, createdTS, updatedTS, completedTS sql.NullInt64
+		var matchedPriorities sql.NullString
+
+		err := rows.Scan(
+			&task.ID, &task.Source, &task.SourceID, &task.Title, &task.Description,
+			&dueTS, &task.Project, &task.Impact, &task.Urgency, &task.Effort,
+			&task.Stakeholder, &task.Score, &task.Status, &task.Metadata,
+			&matchedPriorities, &createdTS, &updatedTS, &completedTS,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if dueTS.Valid {
+			t := time.Unix(dueTS.Int64, 0)
+			task.DueTS = &t
+		}
+		if matchedPriorities.Valid {
+			task.MatchedPriorities = matchedPriorities.String
+		}
+		if createdTS.Valid {
+			task.CreatedAt = time.Unix(createdTS.Int64, 0)
+		}
+		if updatedTS.Valid {
+			task.UpdatedAt = time.Unix(updatedTS.Int64, 0)
+		}
+		if completedTS.Valid {
+			t := time.Unix(completedTS.Int64, 0)
+			task.CompletedAt = &t
+		}
+
+		tasks = append(tasks, task)
+	}
+
+	return tasks, nil
+}
+
+// GetAllTasks returns all tasks regardless of status, sorted by score
+func (db *DB) GetAllTasks(limit int) ([]*Task, error) {
+	query := `
+		SELECT id, source, source_id, title, description, due_ts, project,
+		       impact, urgency, effort, stakeholder, score, status, metadata,
+		       matched_priorities, created_at, updated_at, completed_at
+		FROM tasks
+		ORDER BY score DESC, created_at DESC
 		LIMIT ?
 	`
 

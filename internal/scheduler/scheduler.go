@@ -16,6 +16,7 @@ import (
 
 	"github.com/alexrabarts/focus-agent/internal/config"
 	"github.com/alexrabarts/focus-agent/internal/db"
+	"github.com/alexrabarts/focus-agent/internal/front"
 	"github.com/alexrabarts/focus-agent/internal/google"
 	"github.com/alexrabarts/focus-agent/internal/llm"
 	"github.com/alexrabarts/focus-agent/internal/planner"
@@ -28,6 +29,7 @@ type Scheduler struct {
 	google            *google.Clients
 	llm               llm.Client
 	planner           *planner.Planner
+	front             *front.Client // Front client (nil if disabled)
 	config            *config.Config
 	jobs              map[string]cron.EntryID
 	ctx               context.Context
@@ -36,7 +38,7 @@ type Scheduler struct {
 }
 
 // New creates a new scheduler
-func New(database *db.DB, googleClients *google.Clients, llmClient llm.Client, plannerService *planner.Planner, cfg *config.Config) *Scheduler {
+func New(database *db.DB, googleClients *google.Clients, llmClient llm.Client, plannerService *planner.Planner, frontClient *front.Client, cfg *config.Config) *Scheduler {
 	// Create cron with timezone
 	location, err := time.LoadLocation(cfg.Schedule.Timezone)
 	if err != nil {
@@ -61,6 +63,7 @@ func New(database *db.DB, googleClients *google.Clients, llmClient llm.Client, p
 		google:  googleClients,
 		llm:     llmClient,
 		planner: plannerService,
+		front:   frontClient,
 		config:  cfg,
 		jobs:    make(map[string]cron.EntryID),
 		ctx:     ctx,
@@ -200,6 +203,11 @@ func (s *Scheduler) syncGmail() {
 		s.db.LogUsage("gmail", "sync", 0, 0, 0, err)
 	} else {
 		log.Println("Gmail sync completed")
+
+		// Enrich with Front if enabled
+		if s.config.Front.Enabled && s.config.Front.EnrichOnSync && s.front != nil {
+			go s.enrichWithFront()
+		}
 
 		// After sync, process new messages for task extraction
 		go s.ProcessNewMessages()
@@ -355,9 +363,23 @@ func (s *Scheduler) ProcessSingleThread(threadID string) error {
 		return fmt.Errorf("failed to summarize thread %s: %w", threadID, err)
 	}
 
-	// Extract tasks (pass full messages for context-aware extraction)
+	// Get Front metadata and comments if Front is enabled
+	var frontMetadata *db.FrontMetadata
+	var frontComments []*db.FrontComment
+	if s.front != nil {
+		if meta, err := s.db.GetFrontMetadata(threadID); err == nil {
+			frontMetadata = meta
+			log.Printf("Found Front metadata for thread %s: status=%s, assignee=%s", threadID, meta.Status, meta.AssigneeName)
+		}
+		if comments, err := s.db.GetFrontComments(threadID); err == nil && len(comments) > 0 {
+			frontComments = comments
+			log.Printf("Found %d Front comments for thread %s", len(comments), threadID)
+		}
+	}
+
+	// Extract tasks (pass full messages + Front data for context-aware extraction)
 	// Claude CLI uses full message context to understand conversation flow and avoid false tasks
-	tasks, err := s.llm.ExtractTasksFromMessages(s.ctx, summary, messages)
+	tasks, err := s.llm.ExtractTasksFromMessages(s.ctx, summary, messages, frontComments, frontMetadata)
 	if err != nil {
 		log.Printf("Failed to extract tasks from thread %s: %v", threadID, err)
 	}
@@ -617,8 +639,20 @@ func (s *Scheduler) ProcessNewMessages() {
 			continue
 		}
 
-		// Extract tasks (pass messages for sent email detection)
-		tasks, err := s.llm.ExtractTasksFromMessages(s.ctx, summary, messages)
+		// Get Front metadata and comments if Front is enabled
+		var frontMetadata *db.FrontMetadata
+		var frontComments []*db.FrontComment
+		if s.front != nil {
+			if meta, err := s.db.GetFrontMetadata(threadID); err == nil {
+				frontMetadata = meta
+			}
+			if comments, err := s.db.GetFrontComments(threadID); err == nil {
+				frontComments = comments
+			}
+		}
+
+		// Extract tasks (pass messages + Front data for enhanced context)
+		tasks, err := s.llm.ExtractTasksFromMessages(s.ctx, summary, messages, frontComments, frontMetadata)
 		if err != nil {
 			log.Printf("Failed to extract tasks from thread %s: %v", threadID, err)
 		}
@@ -997,8 +1031,20 @@ func (s *Scheduler) ReprocessAITasks() error {
 			messages = nil // Continue without messages
 		}
 
-		// Extract tasks from summary (pass messages for sent email detection)
-		tasks, err := s.llm.ExtractTasksFromMessages(s.ctx, thread.Summary, messages)
+		// Get Front metadata and comments if Front is enabled
+		var frontMetadata *db.FrontMetadata
+		var frontComments []*db.FrontComment
+		if s.front != nil {
+			if meta, err := s.db.GetFrontMetadata(thread.ID); err == nil {
+				frontMetadata = meta
+			}
+			if comments, err := s.db.GetFrontComments(thread.ID); err == nil {
+				frontComments = comments
+			}
+		}
+
+		// Extract tasks from summary (pass messages + Front data)
+		tasks, err := s.llm.ExtractTasksFromMessages(s.ctx, thread.Summary, messages, frontComments, frontMetadata)
 		if err != nil {
 			log.Printf("Failed to extract tasks from thread %s: %v", thread.ID, err)
 			continue
@@ -1179,4 +1225,108 @@ func purgeDuplicateGmailTasks(database *db.DB, threadID, normalizedTitle string)
 	if _, err := database.Exec(query, threadID, normalizedTitle); err != nil {
 		log.Printf("Failed to purge duplicate tasks for thread %s: %v", threadID, err)
 	}
+}
+
+// enrichWithFront enriches threads with Front metadata and comments
+func (s *Scheduler) enrichWithFront() {
+	if s.front == nil {
+		log.Println("Front client not initialized")
+		return
+	}
+
+	log.Println("Starting Front enrichment...")
+
+	// Get threads needing enrichment
+	threads, err := s.db.GetThreadsNeedingFrontEnrichment(s.config.Front.MaxEnrichPerRun)
+	if err != nil {
+		log.Printf("Failed to get threads for Front enrichment: %v", err)
+		return
+	}
+
+	if len(threads) == 0 {
+		log.Println("No threads need Front enrichment")
+		return
+	}
+
+	log.Printf("Enriching %d threads with Front data...", len(threads))
+
+	successCount := 0
+	for i, thread := range threads {
+		log.Printf("Processing thread %d/%d: %s", i+1, len(threads), thread.ThreadID)
+
+		// Link to Front conversation
+		convID, err := s.front.FindConversationBySubject(s.ctx, thread.Subject, thread.Timestamp)
+		if err != nil {
+			log.Printf("Could not link thread %s to Front: %v", thread.ThreadID, err)
+			continue
+		}
+
+		// Get conversation details
+		conv, err := s.front.GetConversation(s.ctx, convID)
+		if err != nil {
+			log.Printf("Failed to get Front conversation %s: %v", convID, err)
+			continue
+		}
+
+		// Extract tag names
+		var tagNames []string
+		for _, tag := range conv.Tags {
+			tagNames = append(tagNames, tag.Name)
+		}
+
+		// Extract assignee name
+		assigneeID := ""
+		assigneeName := ""
+		if conv.Assignee != nil {
+			assigneeID = conv.Assignee.ID
+			assigneeName = conv.Assignee.Name
+		}
+
+		// Save metadata
+		metadata := &db.FrontMetadata{
+			ThreadID:       thread.ThreadID,
+			ConversationID: conv.ID,
+			Status:         conv.Status,
+			AssigneeID:     assigneeID,
+			AssigneeName:   assigneeName,
+			Tags:           tagNames,
+			LastMessageTS:  time.Unix(conv.LastMessageTimestamp, 0),
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+		}
+
+		if err := s.db.SaveFrontMetadata(metadata); err != nil {
+			log.Printf("Failed to save Front metadata: %v", err)
+			continue
+		}
+
+		// Get internal comments
+		comments, err := s.front.GetComments(s.ctx, convID)
+		if err != nil {
+			log.Printf("Failed to get Front comments for %s: %v", convID, err)
+			// Continue - metadata saved, comments optional
+		} else {
+			for _, comment := range comments {
+				dbComment := &db.FrontComment{
+					ID:             comment.ID,
+					ThreadID:       thread.ThreadID,
+					ConversationID: conv.ID,
+					AuthorName:     comment.Author.GetFullName(),
+					Body:           comment.Body,
+					CreatedAt:      time.Unix(comment.CreatedAt, 0),
+				}
+
+				if err := s.db.SaveFrontComment(dbComment); err != nil {
+					log.Printf("Failed to save Front comment: %v", err)
+				}
+			}
+			log.Printf("Saved %d comments for thread %s", len(comments), thread.ThreadID)
+		}
+
+		successCount++
+		log.Printf("Enriched thread %s (conv: %s, status: %s, %d comments)",
+			thread.ThreadID, conv.ID, conv.Status, len(comments))
+	}
+
+	log.Printf("Front enrichment completed: %d/%d threads enriched", successCount, len(threads))
 }

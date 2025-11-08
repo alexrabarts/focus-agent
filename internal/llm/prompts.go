@@ -179,7 +179,8 @@ Extract my commitments:`, recipientList, p.userEmail, recipientList, content)
 }
 
 // BuildTaskExtractionWithMetadata creates thread-aware extraction with automated sender filtering
-func (p *PromptBuilder) BuildTaskExtractionWithMetadata(messages []*db.Message) string {
+// Now includes Front comments when available
+func (p *PromptBuilder) BuildTaskExtractionWithMetadata(messages []*db.Message, frontComments []*db.FrontComment, frontMetadata *db.FrontMetadata) string {
 	if len(messages) == 0 {
 		return "No messages provided. Return empty list."
 	}
@@ -212,9 +213,28 @@ func (p *PromptBuilder) BuildTaskExtractionWithMetadata(messages []*db.Message) 
 		return "This is an automated system notification. Do not extract any tasks. Return empty list."
 	}
 
+	// Skip archived conversations (they're closed/done)
+	if frontMetadata != nil && frontMetadata.Status == "archived" {
+		log.Printf("Skipping archived Front conversation: %s", frontMetadata.ConversationID)
+		return "This conversation is archived in Front. Do not extract any tasks. Return empty list."
+	}
+
 	var prompt strings.Builder
 
 	prompt.WriteString(fmt.Sprintf("Extract action items for %s from this email thread.\n\n", p.userEmail))
+
+	// Add Front context if available
+	if frontMetadata != nil {
+		prompt.WriteString("=== FRONT CONTEXT ===\n")
+		prompt.WriteString(fmt.Sprintf("Status: %s\n", frontMetadata.Status))
+		if frontMetadata.AssigneeName != "" {
+			prompt.WriteString(fmt.Sprintf("Assigned to: %s\n", frontMetadata.AssigneeName))
+		}
+		if len(frontMetadata.Tags) > 0 {
+			prompt.WriteString(fmt.Sprintf("Tags: %s\n", strings.Join(frontMetadata.Tags, ", ")))
+		}
+		prompt.WriteString("\n")
+	}
 
 	// Add thread context
 	prompt.WriteString("=== EMAIL THREAD ===\n")
@@ -234,6 +254,21 @@ func (p *PromptBuilder) BuildTaskExtractionWithMetadata(messages []*db.Message) 
 			content = content[:500] + "..."
 		}
 		prompt.WriteString(fmt.Sprintf("Content: %s\n\n", content))
+	}
+
+	// Add Front internal comments if available
+	if len(frontComments) > 0 {
+		prompt.WriteString("\n=== INTERNAL TEAM COMMENTS (Front) ===\n")
+		prompt.WriteString("These are internal notes from your team, not visible to the customer:\n\n")
+		for _, comment := range frontComments {
+			prompt.WriteString(fmt.Sprintf("[Comment by %s - %s]\n", comment.AuthorName, comment.CreatedAt.Format("Jan 2, 3:04 PM")))
+			body := comment.Body
+			if len(body) > 300 {
+				body = body[:297] + "..."
+			}
+			prompt.WriteString(fmt.Sprintf("%s\n\n", body))
+		}
+		prompt.WriteString("NOTE: Consider these internal comments when extracting tasks - they may clarify action items or priorities.\n\n")
 	}
 
 	prompt.WriteString("\n=== CRITICAL NOISE REDUCTION RULES (CHECK FIRST) ===\n\n")
@@ -583,7 +618,7 @@ func (p *PromptBuilder) BuildMeetingPrep(event *db.Event, docs []*db.Document) s
 
 // BuildTaskExtractionWithConversationFlow creates an advanced prompt with conversation awareness
 // UPDATED: Now delegates to BuildTaskExtractionWithMetadata for consistency and noise reduction
-func (p *PromptBuilder) BuildTaskExtractionWithConversationFlow(messages []*db.Message) string {
+func (p *PromptBuilder) BuildTaskExtractionWithConversationFlow(messages []*db.Message, frontComments []*db.FrontComment, frontMetadata *db.FrontMetadata) string {
 	// Delegate to metadata-aware extraction for noise reduction + data extraction
-	return p.BuildTaskExtractionWithMetadata(messages)
+	return p.BuildTaskExtractionWithMetadata(messages, frontComments, frontMetadata)
 }

@@ -120,6 +120,12 @@ func (c *DistributedOllamaClient) startWorkers() {
 	c.isRunning.Store(true)
 
 	for _, host := range c.hosts {
+		// Default priority to 1 if not set
+		priority := host.Priority
+		if priority == 0 {
+			priority = 1
+		}
+
 		// Create a simple OllamaClient for each host
 		hostClient := NewOllamaClient(host.URL, c.model, c.prompts)
 		hostClient.httpClient.Timeout = c.timeout
@@ -127,16 +133,26 @@ func (c *DistributedOllamaClient) startWorkers() {
 		// Spawn N workers for this host
 		for i := 0; i < host.Workers; i++ {
 			c.workerWg.Add(1)
-			go c.worker(hostClient, host.Name, i)
+			go c.worker(hostClient, host.Name, priority, i)
 		}
 
-		log.Printf("Started %d workers for Ollama host: %s (%s)", host.Workers, host.Name, host.URL)
+		priorityStr := ""
+		if priority >= 99 {
+			priorityStr = " [FALLBACK ONLY]"
+		} else if priority > 1 {
+			priorityStr = fmt.Sprintf(" [priority %d]", priority)
+		}
+		log.Printf("Started %d workers for Ollama host: %s (%s)%s", host.Workers, host.Name, host.URL, priorityStr)
 	}
 }
 
 // worker processes jobs from the queue
-func (c *DistributedOllamaClient) worker(client *OllamaClient, hostName string, workerID int) {
+func (c *DistributedOllamaClient) worker(client *OllamaClient, hostName string, priority, workerID int) {
 	defer c.workerWg.Done()
+
+	// Fallback workers (priority >= 99) only pick up jobs when queue is backed up
+	isFallback := priority >= 99
+	fallbackThreshold := 10 // Only help when 10+ jobs are waiting
 
 	for {
 		select {
@@ -145,6 +161,19 @@ func (c *DistributedOllamaClient) worker(client *OllamaClient, hostName string, 
 		case job, ok := <-c.jobs:
 			if !ok {
 				return
+			}
+
+			// If this is a fallback worker and queue isn't backed up, put job back and wait
+			if isFallback && len(c.jobs) < fallbackThreshold {
+				// Put the job back for higher priority workers
+				select {
+				case c.jobs <- job:
+					// Successfully returned job to queue
+					time.Sleep(500 * time.Millisecond) // Wait before checking again
+					continue
+				case <-c.shutdownCh:
+					return
+				}
 			}
 
 			// Process the job

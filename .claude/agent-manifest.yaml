@@ -1,12 +1,15 @@
 version: 1
-updated: 2025-11-05T15:16:00Z
+updated: 2025-11-06T22:23:00Z
 project_type: go-backend-database
 detection_method: auto
 agents:
-  - name: go-backend-dev
-    source: backend/go-backend-dev.md
-    copied: 2025-11-05T15:16:00Z
-  - name: database-expert
-    source: backend/database-expert.md
-    copied: 2025-11-05T15:16:00Z
-notes: "Detected Go backend project with DuckDB database and Bubbletea TUI. Focus Agent is a task management system with Google integration."
+  - name: shane-go-backend-dev
+    source: shane-go-backend-dev.md
+    copied: 2025-11-06T22:23:00Z
+  - name: dba-dan-database-expert
+    source: dba-dan-database-expert.md
+    copied: 2025-11-06T22:23:00Z
+  - name: eric-strategic-architect
+    source: eric-strategic-architect.md
+    copied: 2025-11-06T22:23:00Z
+notes: "Detected Go backend project with DuckDB database. Focus-agent is a TUI application for processing Gmail threads with AI."

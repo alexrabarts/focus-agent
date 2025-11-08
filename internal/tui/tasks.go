@@ -60,8 +60,8 @@ func (m TasksModel) fetchTasks() tea.Cmd {
 			// Use remote API
 			tasks, err = m.apiClient.GetTasks()
 		} else {
-			// Use local database
-			tasks, err = m.database.GetPendingTasks(50)
+			// Use local database - get ALL tasks including completed ones
+			tasks, err = m.database.GetAllTasks(100)
 		}
 
 		return tasksLoadedMsg{tasks: tasks, err: err}

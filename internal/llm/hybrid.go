@@ -140,13 +140,13 @@ func (h *HybridClient) callClaude(ctx context.Context, prompt string) (string, e
 }
 
 // extractTasksWithClaude uses Claude CLI to extract tasks from full message thread
-func (h *HybridClient) extractTasksWithClaude(ctx context.Context, messages []*db.Message, userEmail string) ([]*db.Task, error) {
+func (h *HybridClient) extractTasksWithClaude(ctx context.Context, messages []*db.Message, frontComments []*db.FrontComment, frontMetadata *db.FrontMetadata, userEmail string) ([]*db.Task, error) {
 	if h.claudePath == "" {
 		return nil, fmt.Errorf("claude CLI not available")
 	}
 
-	// Build task extraction prompt with full message context
-	prompt := h.prompts.BuildTaskExtractionWithConversationFlow(messages)
+	// Build task extraction prompt with full message context + Front data
+	prompt := h.prompts.BuildTaskExtractionWithConversationFlow(messages, frontComments, frontMetadata)
 
 	// Check cache
 	hash := h.gemini.hashPrompt(prompt)
@@ -347,11 +347,12 @@ func (h *HybridClient) SummarizeThreadWithModelSelection(ctx context.Context, me
 
 // ExtractTasks extracts action items with 3-tier fallback
 func (h *HybridClient) ExtractTasks(ctx context.Context, content string) ([]*db.Task, error) {
-	return h.ExtractTasksFromMessages(ctx, content, nil)
+	return h.ExtractTasksFromMessages(ctx, content, nil, nil, nil)
 }
 
 // ExtractTasksFromMessages extracts tasks with 3-tier fallback (Ollama → Claude → Gemini)
-func (h *HybridClient) ExtractTasksFromMessages(ctx context.Context, content string, messages []*db.Message) ([]*db.Task, error) {
+// Now accepts Front data for enhanced context
+func (h *HybridClient) ExtractTasksFromMessages(ctx context.Context, content string, messages []*db.Message, frontComments []*db.FrontComment, frontMetadata *db.FrontMetadata) ([]*db.Task, error) {
 	userEmail := ""
 	if h.gemini != nil && h.gemini.config != nil {
 		userEmail = h.gemini.config.Google.UserEmail
@@ -372,9 +373,9 @@ func (h *HybridClient) ExtractTasksFromMessages(ctx context.Context, content str
 		log.Printf("Ollama task extraction failed, falling back to Claude: %v", err)
 	}
 
-	// Try Claude CLI second (with full message context for better intelligence)
+	// Try Claude CLI second (with full message context + Front data for better intelligence)
 	if h.claudePath != "" && len(messages) > 0 {
-		tasks, err := h.extractTasksWithClaude(ctx, messages, userEmail)
+		tasks, err := h.extractTasksWithClaude(ctx, messages, frontComments, frontMetadata, userEmail)
 		if err == nil {
 			if len(tasks) > 0 {
 				log.Printf("Extracted %d tasks using Claude CLI", len(tasks))
@@ -388,7 +389,7 @@ func (h *HybridClient) ExtractTasksFromMessages(ctx context.Context, content str
 
 	// Final fallback to Gemini (handles sent email detection and filtering)
 	log.Printf("Using Gemini for task extraction (fallback)")
-	return h.gemini.ExtractTasksFromMessages(ctx, content, messages)
+	return h.gemini.ExtractTasksFromMessages(ctx, content, messages, frontComments, frontMetadata)
 }
 
 // EnrichTaskDescription generates rich contextual descriptions (Ollama -> Claude CLI -> Gemini fallback)
