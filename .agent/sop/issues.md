@@ -20,6 +20,49 @@ Each issue should include:
 
 ---
 
+## Google Tasks Infinite Loop - AI-Generated Tasks Re-Syncing
+
+**Issue:** AI-generated tasks in the "Focus Agent" Google Tasks list were being synced back as input tasks, creating an infinite loop where the same tasks would be processed repeatedly.
+
+**Status:** ✅ **RESOLVED** - Fixed 2025-11-11
+
+**Impact:**
+- Database pollution with duplicate AI-generated tasks
+- Wasted API calls and processing cycles
+- Potential DuckDB WAL corruption from duplicate key violations
+
+**Root Cause:**
+The sync process (`internal/google/tasks.go:SyncTasks()`) was processing ALL task lists including "Focus Agent", which only contains output (AI-generated prioritized tasks). When `SyncPrioritizedTasks()` created tasks like `"[8.5] Review PR #123"` in the Focus Agent list, the next sync would read them back and save them as new input tasks.
+
+**Solution:**
+Added explicit filter in `SyncTasks()` to skip the "Focus Agent" list during sync:
+```go
+// Skip the "Focus Agent" list - it's output only, not input
+if taskList.Title == "Focus Agent" {
+    log.Printf("Skipping Focus Agent list (output only)")
+    continue
+}
+```
+
+**Cleanup Steps Taken:**
+1. Stopped the focus-agent service
+2. Removed corrupted WAL file with duplicate keys
+3. Verified database was clean (no polluted tasks found)
+4. Deployed fixed binary
+5. Added unit test to verify skip logic
+
+**Prevention:**
+- Clear separation between input lists (all others) and output list ("Focus Agent")
+- Unit test documents expected behavior
+- Logs now indicate when Focus Agent list is skipped
+
+**Related Files:**
+- `internal/google/tasks.go:59-64` - Skip logic in SyncTasks()
+- `internal/google/tasks.go:316-419` - SyncPrioritizedTasks() that creates output
+- `internal/google/tasks_test.go` - Unit test for skip behavior
+
+---
+
 ## Front API Integration - Multi-Inbox Limitation
 
 **Issue:** Front integration only enriches conversations from personal inbox (alex@techspace.co - `inb_7mkjy`). Many work emails exist in shared team inboxes (Support, Events, etc.) or other teammates' inboxes and won't be enriched.

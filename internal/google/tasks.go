@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"google.golang.org/api/tasks/v1"
@@ -56,6 +57,12 @@ func (t *TasksClient) SyncTasks(ctx context.Context, database *db.DB) error {
 
 	// Sync each task list
 	for _, taskList := range taskLists.Items {
+		// Skip the "Focus Agent" list - it's output only, not input
+		if taskList.Title == "Focus Agent" {
+			log.Printf("Skipping Focus Agent list (output only)")
+			continue
+		}
+
 		// Check limit
 		if listCount >= maxLists {
 			log.Printf("Reached max task list limit (%d), stopping", maxLists)
@@ -281,4 +288,173 @@ func (t *TasksClient) GetTasks(ctx context.Context, listID string, showCompleted
 	}
 
 	return taskItems.Items, nil
+}
+
+// GetOrCreateFocusAgentList finds or creates the "Focus Agent" task list
+func (t *TasksClient) GetOrCreateFocusAgentList(ctx context.Context) (string, error) {
+	// First, try to find existing "Focus Agent" list
+	lists, err := t.Service.Tasklists.List().Context(ctx).Do()
+	if err != nil {
+		return "", fmt.Errorf("failed to list task lists: %w", err)
+	}
+
+	for _, list := range lists.Items {
+		if list.Title == "Focus Agent" {
+			log.Printf("Found existing Focus Agent task list: %s", list.Id)
+			return list.Id, nil
+		}
+	}
+
+	// Create new list if not found
+	newList := &tasks.TaskList{
+		Title: "Focus Agent",
+	}
+
+	created, err := t.Service.Tasklists.Insert(newList).Context(ctx).Do()
+	if err != nil {
+		return "", fmt.Errorf("failed to create Focus Agent task list: %w", err)
+	}
+
+	log.Printf("Created new Focus Agent task list: %s", created.Id)
+	return created.Id, nil
+}
+
+// SyncPrioritizedTasks syncs top prioritized tasks to the Focus Agent list in Google Tasks
+func (t *TasksClient) SyncPrioritizedTasks(ctx context.Context, database *db.DB) error {
+	log.Println("Starting sync of prioritized tasks to Google Tasks...")
+
+	// Get or create Focus Agent list
+	listID, err := t.GetOrCreateFocusAgentList(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get Focus Agent list: %w", err)
+	}
+
+	// Get top prioritized tasks (limit to 50 for mobile usability)
+	maxTasks := 50
+	pendingTasks, err := database.GetPendingTasks(maxTasks)
+	if err != nil {
+		return fmt.Errorf("failed to get pending tasks: %w", err)
+	}
+
+	log.Printf("Found %d pending tasks to sync", len(pendingTasks))
+
+	// Get existing tasks in Focus Agent list for comparison
+	existingTasks, err := t.GetTasks(ctx, listID, false)
+	if err != nil {
+		return fmt.Errorf("failed to get existing tasks: %w", err)
+	}
+
+	// Build map of existing tasks by title for quick lookup
+	existingByTitle := make(map[string]*tasks.Task)
+	for _, task := range existingTasks {
+		existingByTitle[task.Title] = task
+	}
+
+	// Sync each pending task
+	syncedCount := 0
+	for _, dbTask := range pendingTasks {
+		// Format task title with priority info
+		title := formatTaskTitle(dbTask)
+
+		// Check if task already exists
+		if existingTask, exists := existingByTitle[title]; exists {
+			// Update existing task if needed
+			needsUpdate := false
+			updateTask := &tasks.Task{
+				Id:     existingTask.Id,
+				Title:  title,
+				Notes:  formatTaskNotes(dbTask),
+				Status: "needsAction",
+			}
+
+			if dbTask.DueTS != nil {
+				updateTask.Due = dbTask.DueTS.Format(time.RFC3339)
+				if existingTask.Due != updateTask.Due {
+					needsUpdate = true
+				}
+			}
+
+			if existingTask.Notes != updateTask.Notes {
+				needsUpdate = true
+			}
+
+			if needsUpdate {
+				if _, err := t.UpdateTask(ctx, listID, existingTask.Id, updateTask); err != nil {
+					log.Printf("Failed to update task '%s': %v", title, err)
+					continue
+				}
+				log.Printf("Updated task: %s", title)
+			}
+
+			// Remove from map so we know it's accounted for
+			delete(existingByTitle, title)
+		} else {
+			// Create new task
+			newTask := &tasks.Task{
+				Title:  title,
+				Notes:  formatTaskNotes(dbTask),
+				Status: "needsAction",
+			}
+
+			if dbTask.DueTS != nil {
+				newTask.Due = dbTask.DueTS.Format(time.RFC3339)
+			}
+
+			if _, err := t.CreateTask(ctx, listID, newTask.Title, newTask.Notes, dbTask.DueTS); err != nil {
+				log.Printf("Failed to create task '%s': %v", title, err)
+				continue
+			}
+			log.Printf("Created task: %s", title)
+		}
+		syncedCount++
+	}
+
+	// Delete tasks that are no longer in the top N (they fell off the priority list)
+	deletedCount := 0
+	for _, orphanedTask := range existingByTitle {
+		if err := t.Service.Tasks.Delete(listID, orphanedTask.Id).Context(ctx).Do(); err != nil {
+			log.Printf("Failed to delete orphaned task '%s': %v", orphanedTask.Title, err)
+			continue
+		}
+		log.Printf("Deleted orphaned task: %s", orphanedTask.Title)
+		deletedCount++
+	}
+
+	log.Printf("Sync complete: %d tasks synced, %d orphaned tasks deleted", syncedCount, deletedCount)
+	return nil
+}
+
+// formatTaskTitle formats a task title with priority indicators
+func formatTaskTitle(task *db.Task) string {
+	// Format: "[Score: 8.5] Task title"
+	return fmt.Sprintf("[%.1f] %s", task.Score, task.Title)
+}
+
+// formatTaskNotes formats task notes with enriched metadata
+func formatTaskNotes(task *db.Task) string {
+	var notes strings.Builder
+
+	// Add description
+	if task.Description != "" {
+		notes.WriteString(task.Description)
+		notes.WriteString("\n\n")
+	}
+
+	// Add metadata section
+	notes.WriteString("---\n")
+	notes.WriteString(fmt.Sprintf("Impact: %d/5\n", task.Impact))
+	notes.WriteString(fmt.Sprintf("Urgency: %d/5\n", task.Urgency))
+	notes.WriteString(fmt.Sprintf("Effort: %s\n", task.Effort))
+
+	if task.Stakeholder != "" {
+		notes.WriteString(fmt.Sprintf("Stakeholder: %s\n", task.Stakeholder))
+	}
+
+	if task.Project != "" {
+		notes.WriteString(fmt.Sprintf("Project: %s\n", task.Project))
+	}
+
+	notes.WriteString(fmt.Sprintf("Source: %s\n", task.Source))
+
+	return notes.String()
 }
