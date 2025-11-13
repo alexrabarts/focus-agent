@@ -41,11 +41,20 @@ func Init(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
+	// Install VSS extension for vector similarity search
+	if _, err := sqlDB.Exec("INSTALL vss"); err != nil {
+		return nil, fmt.Errorf("failed to install VSS extension: %w", err)
+	}
+	if _, err := sqlDB.Exec("LOAD vss"); err != nil {
+		return nil, fmt.Errorf("failed to load VSS extension: %w", err)
+	}
+
 	// Configure DuckDB settings for performance
 	settings := []string{
 		"SET memory_limit='1GB'",
 		"SET threads TO 4",
 		"SET default_order='ASC'",
+		"SET hnsw_enable_experimental_persistence = true",
 	}
 
 	for _, setting := range settings {

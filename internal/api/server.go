@@ -14,6 +14,7 @@ import (
 	"github.com/alexrabarts/focus-agent/internal/google"
 	"github.com/alexrabarts/focus-agent/internal/llm"
 	"github.com/alexrabarts/focus-agent/internal/planner"
+	"github.com/alexrabarts/focus-agent/internal/scoring"
 )
 
 // Scheduler interface to avoid circular dependency
@@ -144,4 +145,9 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 // Helper to write error responses
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+// saveFeedback saves priority feedback to the database
+func (s *Server) saveFeedback(taskID string, vote int, reason string, originalScore, adjustedScore float64) error {
+	return scoring.SaveFeedback(s.database, taskID, vote, reason, originalScore, adjustedScore)
 }

@@ -224,7 +224,7 @@ func applyDefaults(cfg *Config) {
 		"https://www.googleapis.com/auth/gmail.readonly",
 		"https://www.googleapis.com/auth/drive.readonly",
 		"https://www.googleapis.com/auth/calendar.readonly",
-		"https://www.googleapis.com/auth/tasks.readonly",
+		"https://www.googleapis.com/auth/tasks", // Changed from readonly to allow creating/updating tasks
 		"https://www.googleapis.com/auth/chat.messages",
 		"https://www.googleapis.com/auth/chat.spaces.readonly",
 		"https://www.googleapis.com/auth/chat.memberships.readonly",

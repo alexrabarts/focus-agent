@@ -464,3 +464,19 @@ func (c *APIClient) TriggerProcessing() error {
 	defer resp.Body.Close()
 	return nil
 }
+
+// SubmitFeedback submits priority feedback for a task via the remote API
+func (c *APIClient) SubmitFeedback(taskID string, vote int, reason string) error {
+	reqBody := map[string]interface{}{
+		"vote":   vote,
+		"reason": reason,
+	}
+
+	resp, err := c.doRequest("POST", fmt.Sprintf("/api/tasks/%s/feedback", taskID), reqBody)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	return nil
+}

@@ -102,7 +102,7 @@ func (s *Scheduler) Start() error {
 	s.jobs["calendar"] = calendarID
 	log.Printf("Scheduled Calendar sync every %d minutes", s.config.Google.PollingMinutes.Calendar)
 
-	// Schedule Tasks sync
+	// Schedule Tasks sync (inbound: Google Tasks -> Focus Agent DB)
 	tasksSpec := fmt.Sprintf("@every %dm", s.config.Google.PollingMinutes.Tasks)
 	tasksID, err := s.cron.AddFunc(tasksSpec, s.syncTasks)
 	if err != nil {
@@ -110,6 +110,15 @@ func (s *Scheduler) Start() error {
 	}
 	s.jobs["tasks"] = tasksID
 	log.Printf("Scheduled Tasks sync every %d minutes", s.config.Google.PollingMinutes.Tasks)
+
+	// Schedule prioritized tasks sync (outbound: Focus Agent DB -> Google Tasks)
+	prioritizedTasksSpec := fmt.Sprintf("@every %dm", s.config.Google.PollingMinutes.Tasks)
+	prioritizedTasksID, err := s.cron.AddFunc(prioritizedTasksSpec, s.syncPrioritizedTasks)
+	if err != nil {
+		return fmt.Errorf("failed to schedule prioritized tasks sync: %w", err)
+	}
+	s.jobs["prioritized_tasks"] = prioritizedTasksID
+	log.Printf("Scheduled prioritized tasks sync every %d minutes", s.config.Google.PollingMinutes.Tasks)
 
 	// Schedule daily brief
 	dailyTime := s.config.Schedule.DailyBriefTime
@@ -238,7 +247,7 @@ func (s *Scheduler) syncCalendar() {
 	}
 }
 
-// syncTasks syncs Google Tasks
+// syncTasks syncs Google Tasks (inbound: Google Tasks -> DB)
 func (s *Scheduler) syncTasks() {
 	log.Println("Starting Tasks sync...")
 
@@ -250,12 +259,25 @@ func (s *Scheduler) syncTasks() {
 	}
 }
 
+// syncPrioritizedTasks syncs prioritized tasks to Google Tasks (outbound: DB -> Google Tasks)
+func (s *Scheduler) syncPrioritizedTasks() {
+	log.Println("Starting prioritized tasks sync to Google Tasks...")
+
+	if err := s.google.Tasks.SyncPrioritizedTasks(s.ctx, s.db); err != nil {
+		log.Printf("Prioritized tasks sync failed: %v", err)
+		s.db.LogUsage("tasks", "sync_prioritized", 0, 0, 0, err)
+	} else {
+		log.Println("Prioritized tasks sync completed")
+	}
+}
+
 // syncAll runs all sync operations
 func (s *Scheduler) syncAll() {
 	s.syncGmail()
 	s.syncDrive()
 	s.syncCalendar()
 	s.syncTasks()
+	s.syncPrioritizedTasks()
 }
 
 // sendDailyBrief sends the morning daily brief

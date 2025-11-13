@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -11,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/alexrabarts/focus-agent/internal/db"
 	"github.com/alexrabarts/focus-agent/internal/planner"
+	"github.com/alexrabarts/focus-agent/internal/scoring"
 )
 
 type TasksModel struct {
@@ -27,11 +29,19 @@ type TasksModel struct {
 	maxScroll           int      // Maximum scroll position for current task
 	viewport            viewport.Model
 	ready               bool
+	feedbackMessage     string   // Feedback confirmation message
+	feedbackMessageTime int      // Ticks since feedback message shown
 }
 
 type tasksLoadedMsg struct {
 	tasks []*db.Task
 	err   error
+}
+
+type feedbackSubmittedMsg struct {
+	success bool
+	err     error
+	vote    int
 }
 
 func NewTasksModel(database *db.DB, planner *planner.Planner, apiClient *APIClient) TasksModel {
@@ -80,6 +90,19 @@ func (m *TasksModel) Update(msg tea.Msg) (*TasksModel, tea.Cmd) {
 		m.tasks = msg.tasks
 		return m, nil
 
+	case feedbackSubmittedMsg:
+		if msg.err != nil {
+			m.feedbackMessage = fmt.Sprintf("❌ Failed to submit feedback: %v", msg.err)
+		} else {
+			voteText := "↑ priority too low"
+			if msg.vote == -1 {
+				voteText = "↓ priority too high"
+			}
+			m.feedbackMessage = fmt.Sprintf("✓ Feedback submitted: %s", voteText)
+		}
+		m.feedbackMessageTime = 0
+		return m, nil
+
 	case tea.KeyMsg:
 		// If in detail view, handle detail-specific keys
 		if m.selectedTask != nil {
@@ -88,6 +111,7 @@ func (m *TasksModel) Update(msg tea.Msg) (*TasksModel, tea.Cmd) {
 				// Return to list view
 				m.selectedTask = nil
 				m.detailScroll = 0
+				m.feedbackMessage = "" // Clear feedback message
 				return m, nil
 			case "up", "k":
 				// Scroll up first, then navigate to previous task
@@ -98,6 +122,7 @@ func (m *TasksModel) Update(msg tea.Msg) (*TasksModel, tea.Cmd) {
 					m.cursor--
 					m.selectedTask = m.tasks[m.cursor]
 					m.detailScroll = 0
+					m.feedbackMessage = "" // Clear feedback when changing tasks
 				}
 			case "down", "j":
 				// Scroll down first, then navigate to next task
@@ -108,6 +133,7 @@ func (m *TasksModel) Update(msg tea.Msg) (*TasksModel, tea.Cmd) {
 					m.cursor++
 					m.selectedTask = m.tasks[m.cursor]
 					m.detailScroll = 0
+					m.feedbackMessage = "" // Clear feedback when changing tasks
 				}
 			case "c":
 				// Complete task from detail view
@@ -116,6 +142,12 @@ func (m *TasksModel) Update(msg tea.Msg) (*TasksModel, tea.Cmd) {
 				m.selectedTask = nil // Return to list
 				m.detailScroll = 0
 				return m, m.completeTask(task)
+			case "+", "=":
+				// Priority too low - should be higher
+				return m, m.submitFeedback(m.selectedTask, 1, "")
+			case "-", "_":
+				// Priority too high - should be lower
+				return m, m.submitFeedback(m.selectedTask, -1, "")
 			}
 			return m, nil
 		}
@@ -215,6 +247,28 @@ func (m TasksModel) uncompleteTask(taskID string) tea.Cmd {
 		}
 
 		return tasksLoadedMsg{tasks: tasks, err: err}
+	}
+}
+
+func (m TasksModel) submitFeedback(task *db.Task, vote int, reason string) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+
+		if m.apiClient != nil {
+			// Submit feedback via API
+			err = m.apiClient.SubmitFeedback(task.ID, vote, reason)
+		} else {
+			// Save feedback locally
+			err = scoring.SaveFeedback(m.database, task.ID, vote, reason, task.Score, task.Score)
+		}
+
+		if err != nil {
+			log.Printf("Failed to save feedback: %v", err)
+			return feedbackSubmittedMsg{success: false, err: err, vote: vote}
+		}
+
+		log.Printf("Feedback saved for task %s: vote=%d", task.ID, vote)
+		return feedbackSubmittedMsg{success: true, err: nil, vote: vote}
 	}
 }
 
@@ -753,6 +807,32 @@ func (m *TasksModel) renderTaskDetail() string {
 		}
 	}
 
+	// Priority Feedback section
+	b.WriteString("\n")
+	feedbackTitleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("208")).
+		Padding(0, 1)
+
+	b.WriteString(feedbackTitleStyle.Render("💬 Priority Feedback:") + "\n")
+
+	feedbackStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("250")).
+		Padding(0, 2)
+
+	b.WriteString(feedbackStyle.Render("Should this task's priority be adjusted?") + "\n")
+	b.WriteString(feedbackStyle.Render("  +/= : ↑ Priority too low (should be higher)") + "\n")
+	b.WriteString(feedbackStyle.Render("  -/_ : ↓ Priority too high (should be lower)") + "\n")
+
+	// Show feedback message if exists
+	if m.feedbackMessage != "" {
+		feedbackMsgStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("46")).
+			Bold(true).
+			Padding(0, 2)
+		b.WriteString(feedbackMsgStyle.Render(m.feedbackMessage) + "\n")
+	}
+
 	// Help text
 	b.WriteString("\n")
 	helpStyle := lipgloss.NewStyle().
@@ -768,10 +848,10 @@ func (m *TasksModel) renderTaskDetail() string {
 		m.maxScroll = 0
 	}
 
-	// Simple help text - let terminal handle scrolling naturally
-	helpText := "↑/↓: prev/next task | c: complete | esc/q: back to list"
+	// Updated help text with feedback keys
+	helpText := "↑/↓: prev/next task | c: complete | +/-: feedback | esc/q: back to list"
 	if m.maxScroll > 5 {
-		helpText = "↑/↓: scroll then navigate | c: complete | esc/q: back"
+		helpText = "↑/↓: scroll then navigate | c: complete | +/-: feedback | esc/q: back"
 	}
 	b.WriteString(helpStyle.Render(helpText))
 

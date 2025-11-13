@@ -175,9 +175,53 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "pending"})
 
+	case "feedback":
+		// Handle priority feedback submission
+		s.handleTaskFeedback(w, r, taskID)
+		return
+
 	default:
 		writeError(w, http.StatusBadRequest, "Invalid action")
 	}
+}
+
+// POST /api/tasks/:id/feedback - Submit priority feedback
+func (s *Server) handleTaskFeedback(w http.ResponseWriter, r *http.Request, taskID string) {
+	// Parse request body
+	var req struct {
+		Vote   int    `json:"vote"`   // -1 (thumbs down) or +1 (thumbs up)
+		Reason string `json:"reason"` // Optional reason text
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	// Validate vote
+	if req.Vote != -1 && req.Vote != 1 {
+		writeError(w, http.StatusBadRequest, "Vote must be -1 or 1")
+		return
+	}
+
+	// Get task to retrieve current score
+	task, err := s.database.GetTaskByID(taskID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
+
+	// Import scoring package for SaveFeedback
+	// Note: This requires adding the import at the top of the file
+	if err := s.saveFeedback(task.ID, req.Vote, req.Reason, task.Score, task.Score); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status": "success",
+		"vote":   req.Vote,
+	})
 }
 
 // GET /api/priorities - Get all priorities

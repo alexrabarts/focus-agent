@@ -327,6 +327,51 @@ func (db *DB) GetPendingTasks(limit int) ([]*Task, error) {
 	return tasks, nil
 }
 
+// GetTaskByID returns a single task by ID
+func (db *DB) GetTaskByID(taskID string) (*Task, error) {
+	query := `
+		SELECT id, source, source_id, title, description, due_ts, project,
+		       impact, urgency, effort, stakeholder, score, status, metadata,
+		       matched_priorities, created_at, updated_at, completed_at
+		FROM tasks
+		WHERE id = ?
+	`
+
+	task := &Task{}
+	var dueTS, createdTS, updatedTS, completedTS sql.NullInt64
+	var matchedPriorities sql.NullString
+
+	err := db.QueryRow(query, taskID).Scan(
+		&task.ID, &task.Source, &task.SourceID, &task.Title, &task.Description,
+		&dueTS, &task.Project, &task.Impact, &task.Urgency, &task.Effort,
+		&task.Stakeholder, &task.Score, &task.Status, &task.Metadata,
+		&matchedPriorities, &createdTS, &updatedTS, &completedTS,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if dueTS.Valid {
+		t := time.Unix(dueTS.Int64, 0)
+		task.DueTS = &t
+	}
+	if matchedPriorities.Valid {
+		task.MatchedPriorities = matchedPriorities.String
+	}
+	if createdTS.Valid {
+		task.CreatedAt = time.Unix(createdTS.Int64, 0)
+	}
+	if updatedTS.Valid {
+		task.UpdatedAt = time.Unix(updatedTS.Int64, 0)
+	}
+	if completedTS.Valid {
+		t := time.Unix(completedTS.Int64, 0)
+		task.CompletedAt = &t
+	}
+
+	return task, nil
+}
+
 // GetAllTasks returns all tasks regardless of status, sorted by score
 func (db *DB) GetAllTasks(limit int) ([]*Task, error) {
 	query := `

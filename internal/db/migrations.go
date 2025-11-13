@@ -404,6 +404,144 @@ func GetMigrations() []Migration {
 				return err
 			},
 		},
+		{
+			Version: 7,
+			Name:    "add_embeddings_and_feedback_tables",
+			Up: func(tx *sql.Tx) error {
+				// Install and load VSS extension
+				_, err := tx.Exec(`INSTALL vss`)
+				if err != nil {
+					return fmt.Errorf("failed to install VSS extension: %w", err)
+				}
+				_, err = tx.Exec(`LOAD vss`)
+				if err != nil {
+					return fmt.Errorf("failed to load VSS extension: %w", err)
+				}
+
+				// Enable HNSW experimental persistence
+				_, err = tx.Exec(`SET hnsw_enable_experimental_persistence = true`)
+				if err != nil {
+					return fmt.Errorf("failed to enable HNSW persistence: %w", err)
+				}
+
+				// Check if task_embeddings table exists
+				var count int
+				err = tx.QueryRow(`
+					SELECT COUNT(*)
+					FROM information_schema.tables
+					WHERE table_name='task_embeddings'
+				`).Scan(&count)
+				if err != nil {
+					return fmt.Errorf("failed to check task_embeddings table: %w", err)
+				}
+
+				// Create task_embeddings table if it doesn't exist
+				if count == 0 {
+					_, err = tx.Exec(`
+						CREATE TABLE task_embeddings (
+							task_id VARCHAR PRIMARY KEY,
+							embedding FLOAT[768] NOT NULL,
+							embedding_content VARCHAR NOT NULL,
+							model VARCHAR NOT NULL,
+							generated_at BIGINT NOT NULL,
+							FOREIGN KEY (task_id) REFERENCES tasks(id)
+						);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create task_embeddings table: %w", err)
+					}
+
+					// Create HNSW index for vector similarity search
+					_, err = tx.Exec(`
+						CREATE INDEX IF NOT EXISTS idx_task_embeddings_hnsw
+						ON task_embeddings USING HNSW (embedding);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create HNSW index: %w", err)
+					}
+				}
+
+				// Check if priority_feedback table exists
+				err = tx.QueryRow(`
+					SELECT COUNT(*)
+					FROM information_schema.tables
+					WHERE table_name='priority_feedback'
+				`).Scan(&count)
+				if err != nil {
+					return fmt.Errorf("failed to check priority_feedback table: %w", err)
+				}
+
+				// Create priority_feedback table if it doesn't exist
+				if count == 0 {
+					_, err = tx.Exec(`
+						CREATE TABLE priority_feedback (
+							id VARCHAR PRIMARY KEY,
+							task_id VARCHAR NOT NULL,
+							user_vote INTEGER NOT NULL CHECK (user_vote IN (-1, 1)),
+							reason VARCHAR DEFAULT NULL,
+							original_score DOUBLE,
+							adjusted_score DOUBLE,
+							feedback_at BIGINT NOT NULL,
+							FOREIGN KEY (task_id) REFERENCES tasks(id)
+						);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create priority_feedback table: %w", err)
+					}
+
+					// Create indexes
+					_, err = tx.Exec(`
+						CREATE INDEX IF NOT EXISTS idx_priority_feedback_task ON priority_feedback(task_id);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create feedback_task index: %w", err)
+					}
+
+					_, err = tx.Exec(`
+						CREATE INDEX IF NOT EXISTS idx_priority_feedback_vote ON priority_feedback(user_vote);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create feedback_vote index: %w", err)
+					}
+
+					_, err = tx.Exec(`
+						CREATE INDEX IF NOT EXISTS idx_priority_feedback_ts ON priority_feedback(feedback_at);
+					`)
+					if err != nil {
+						return fmt.Errorf("failed to create feedback_ts index: %w", err)
+					}
+				}
+
+				return nil
+			},
+			Down: func(tx *sql.Tx) error {
+				// Drop indexes
+				_, err := tx.Exec(`DROP INDEX IF EXISTS idx_priority_feedback_ts`)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`DROP INDEX IF EXISTS idx_priority_feedback_vote`)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`DROP INDEX IF EXISTS idx_priority_feedback_task`)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`DROP INDEX IF EXISTS idx_task_embeddings_hnsw`)
+				if err != nil {
+					return err
+				}
+
+				// Drop tables
+				_, err = tx.Exec(`DROP TABLE IF EXISTS priority_feedback`)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`DROP TABLE IF EXISTS task_embeddings`)
+				return err
+			},
+		},
 		// Add future migrations here
 	}
 }
