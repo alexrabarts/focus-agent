@@ -270,6 +270,7 @@ func (db *DB) SaveTask(task *Task) error {
 }
 
 // GetPendingTasks returns all pending tasks sorted by score (highest first)
+// Filters out tasks assigned to other people based on stakeholder field
 func (db *DB) GetPendingTasks(limit int) ([]*Task, error) {
 	query := `
 		SELECT id, source, source_id, title, description, due_ts, project,
@@ -277,6 +278,12 @@ func (db *DB) GetPendingTasks(limit int) ([]*Task, error) {
 		       matched_priorities, created_at, updated_at, completed_at
 		FROM tasks
 		WHERE status = 'pending'
+		  AND (
+		    stakeholder IS NULL
+		    OR stakeholder = ''
+		    OR LOWER(stakeholder) IN ('me', 'you', 'i', 'myself')
+		    OR stakeholder LIKE '%@%'
+		  )
 		ORDER BY score DESC
 		LIMIT ?
 	`
@@ -373,12 +380,19 @@ func (db *DB) GetTaskByID(taskID string) (*Task, error) {
 }
 
 // GetAllTasks returns all tasks regardless of status, sorted by score
+// Filters out tasks assigned to other people based on stakeholder field
 func (db *DB) GetAllTasks(limit int) ([]*Task, error) {
 	query := `
 		SELECT id, source, source_id, title, description, due_ts, project,
 		       impact, urgency, effort, stakeholder, score, status, metadata,
 		       matched_priorities, created_at, updated_at, completed_at
 		FROM tasks
+		WHERE (
+		    stakeholder IS NULL
+		    OR stakeholder = ''
+		    OR LOWER(stakeholder) IN ('me', 'you', 'i', 'myself')
+		    OR stakeholder LIKE '%@%'
+		  )
 		ORDER BY score DESC, created_at DESC
 		LIMIT ?
 	`
